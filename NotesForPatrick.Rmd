@@ -1,0 +1,217 @@
+---
+title: "Notes for Patrick"
+author: "Peter Claussen"
+date: "2025-09-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Enter data for Easting smoothed yield estimates evaluated at 214m and 216m
+
+```{r}
+Yield214 <- data.frame(
+  Yield = c(142.30999016112, 134.816631390101, 133.427917773201, 161.481654793547, 165.271076641428, 158.365568915447,
+          166.495294761056, 181.416059276517, 133.903642716581, 134.81774322369, 157.191283964691, 172.503265011261,
+          165.112451330955, 158.903795932606, 183.319650297151, 186.357485025453, 176.135437423899, 188.849845511496,
+          191.304313015102, 187.465572345687, 173.793504062, 190.236566631752, 193.796227256552, 203.197339018491),
+  Product = factor(c("E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B",
+            "E", "E", "B", "B")),
+  Northing = c(0.783072959421157, 6.8630408585656, 12.9852964518518, 19.0984345227862, 25.1816935720809, 
+             31.3085784454595, 37.320366207733, 43.4594654812367, 49.4976038696288, 55.6446310137961, 
+             61.6350571132918, 67.7339494941491, 73.7622992709295, 79.9142402925501, 86.0080040887833, 
+             92.093686219178, 98.1548134744314, 104.314751055382, 110.340220433542, 116.426924809464, 
+             122.447750322627, 128.540554585316, 134.522876331975, 140.681138361472)
+)
+Yield216 <- data.frame(
+  Yield = c(139.226769807541, 131.535935351134, 129.140773440201, 156.491482634976, 163.636680369683, 
+            156.161889299633, 165.861947713099, 180.21979467059, 132.06574725736, 133.005306604335, 
+            156.961068484051, 173.256663183778, 164.792329964379, 159.063216126603, 182.33180291636, 
+            185.075272348869, 174.52824925003, 187.32511712949, 189.860309540485, 186.671392327381, 
+            174.971929918947, 192.247442350469, 194.586351881239, 204.649772439691),
+  Product = factor(c("E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", 
+            "B", "B", "E", "E", "B", "B")),
+  Northing = c(0.783072959421157, 6.8630408585656, 12.9852964518518, 19.0984345227862, 25.1816935720809, 
+             31.3085784454595, 37.320366207733, 43.4594654812367, 49.4976038696288, 55.6446310137961, 
+             61.6350571132918, 67.7339494941491, 73.7622992709295, 79.9142402925501, 86.0080040887833, 
+             92.093686219178, 98.1548134744314, 104.314751055382, 110.340220433542, 116.426924809464, 
+             122.447750322627, 128.540554585316, 134.522876331975, 140.681138361472)
+)
+Yield218 <- data.frame(
+    Yield=c(136.3645, 128.5203, 125.2104, 151.7673, 162.1232, 154.0905, 165.4766, 179.2397, 130.6581, 
+            131.5777, 156.9808, 174.0609, 164.5684, 159.2720, 181.3242, 183.6998, 172.9337, 185.6536, 
+            188.3372, 185.7617, 176.0440, 194.1953, 195.3868, 206.0945),
+  Product = factor(c("E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", 
+            "B", "B", "E", "E", "B", "B")), 
+ Northing = c(0.783073, 6.863041, 12.985296, 19.098435, 25.181694, 31.308578, 37.320366, 43.459465, 
+              49.497604, 55.644631, 61.635057, 67.733949, 73.762299, 79.914240, 86.008004, 92.093686,
+              98.154813, 104.314751, 110.340220, 116.426925, 122.447750, 128.540555, 134.522876, 140.681138)
+  
+)
+```
+
+```{r}
+library(mgcv)
+gam14 <- gam(Yield ~ Product + s(Northing), data=Yield214)
+gam.check(gam14)
+coef(gam14)
+summary(gam14)
+gam14.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield214)
+gam.check(gam14.int)
+coef(gam14.int)
+summary(gam14.int)
+```
+
+According to Google AI, `$sp` is $\lambda$
+
+```{r}
+gam14$sp
+gam14.int$sp
+```
+
+According to Google AI, we get the $S$ matrix by `$smooth[[1]]$S`
+
+```{r}
+gam14$smooth[[1]]$S
+image(gam14$smooth[[1]]$S[[1]])
+```
+
+According to Google AI, `gam` does not explicity return the weights matrix $W$.
+
+According to Google AI, the $A$ matrix can be extract using `model.matrix`
+
+```{r}
+model.matrix(gam14)
+image(model.matrix(gam14))
+```
+
+According to Google AI, this is the code to extract the $X$ matrix
+
+```{r}
+predict(gam14, type = "lpmatrix")
+image(predict(gam14, type = "lpmatrix"))
+```
+
+```{r}
+gam16 <- gam(Yield ~ Product + s(Northing), data=Yield216)
+gam.check(gam16)
+coef(gam16)
+summary(gam16)
+gam16.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield216)
+gam.check(gam16.int)
+coef(gam16.int)
+summary(gam16.int)
+```
+
+```{r}
+gam16$sp
+gam16.int$sp
+```
+
+```{r}
+gam16$smooth[[1]]$S
+image(gam16$smooth[[1]]$S[[1]])
+```
+
+```{r}
+model.matrix(gam16)
+image(model.matrix(gam16))
+```
+
+```{r}
+predict(gam16, type = "lpmatrix")
+image(predict(gam16, type = "lpmatrix"))
+```
+
+```{r}
+plot(Yield214$Northing,predict(gam14),type='l')
+lines(Yield216$Northing,predict(gam16),col='red')
+```
+
+```{r}
+gam14.bs <- gam(Yield ~ Product + s(Northing,bs='bs'), data=Yield214)
+gam16.bs <- gam(Yield ~ Product + s(Northing,bs='bs'), data=Yield216)
+gam18.bs <- gam(Yield ~ Product + s(Northing,bs='bs'), data=Yield218)
+```
+
+According to https://cran.r-project.org/web/packages/mgcv/mgcv.pdf, `weights` are the final weights of the IRLS algorithm.
+
+```{r}
+gam14.bs$weights
+gam16.bs$weights
+gam18.bs$weights
+```
+
+Extract the $X$ matrix, create a transpose and multiply. We'll then check to condition number
+
+```{r}
+X14 <- predict(gam14.bs, type = "lpmatrix")
+image(X14)
+XtX14 <- t(X14) %*% X14
+image(XtX14)
+kappa(XtX14)
+```
+
+
+```{r}
+X16 <- predict(gam16.bs, type = "lpmatrix")
+image(X16)
+XtX16 <- t(X16) %*% X16
+image(XtX16)
+kappa(XtX16)
+```
+
+```{r}
+X18 <- predict(gam18.bs, type = "lpmatrix")
+image(X18)
+XtX18 <- t(X18) %*% X18
+image(XtX18)
+kappa(XtX18)
+```
+
+So it doesn't appear the the $X^t W X$ portion of the fitting is a problem. Now consider the $S$ matrix.
+
+```{r}
+image(gam14.bs$smooth[[1]]$S[[1]])
+kappa(gam14.bs$smooth[[1]]$S[[1]])
+```
+
+```{r}
+image(gam16.bs$smooth[[1]]$S[[1]])
+kappa(gam16.bs$smooth[[1]]$S[[1]])
+```
+
+```{r}
+image(gam18.bs$smooth[[1]]$S[[1]])
+kappa(gam18.bs$smooth[[1]]$S[[1]])
+```
+
+It may be that the GCV algorithm is forcing $\lambda$ to be unreasonable.
+
+```{r}
+gam14.bs$sp
+coef(gam14.bs)
+gam16.bs$sp
+coef(gam16.bs)
+gam18.bs$sp
+coef(gam18.bs)
+```
+
+```{r}
+plot(Yield214$Northing,predict(gam14.bs),type='l')
+lines(Yield216$Northing,predict(gam16.bs),col='red')
+lines(Yield218$Northing,predict(gam18.bs),col='blue')
+```
+
+```{r}
+gam14.ps <- gam(Yield ~ Product + s(Northing,bs="ps"), data=Yield214)
+gam16.ps <- gam(Yield ~ Product + s(Northing,bs="ps"), data=Yield216)
+```
+
+```{r}
+plot(Yield214$Northing,predict(gam14.ps),type='l')
+lines(Yield216$Northing,predict(gam16.ps),col='red')
+```
+
