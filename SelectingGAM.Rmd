@@ -1,0 +1,124 @@
+---
+title: "SelectingGAM"
+author: "Peter Claussen"
+date: "2025-08-28"
+output: html_document
+---
+
+# Introduction
+
+When using the `gam` function from the `mgcv` library , it is possible include an `k` argument that is roughly related to the number of knots. The `mgcv` library does not appear to use `k` to directly control knots, instead it is evaluated as an upper limit to the effective degrees of freedom of the smoother.
+
+In contrast the `gam` function from the `gam` library does allow for more direct control of the number of knots. In this document, we compare the relationship between degrees of freedom requested for the smoother with the ordinary cross-validation (OCV), otherwise known as leave-one-out cross validation (LOOCV). For this document, we use a single ha harvest pass from corn yield monitor data. The data were generated from my thesis by the following code:
+
+```{r, eval=FALSE}
+load(file='./data/Strips.Rda')
+#rename data table to match our naming for this code
+Example1.dat <- EastQuarter.dat
+remove(EastQuarter.dat)
+Example1.dat[,'Pass'] <- floor(Example1.dat[,'Northing']/6)+1
+Example1.dat[,'Pass'] <- as.factor(Example1.dat[,'Pass'])
+Example1.dat[,'Pair'] <- as.factor(Example1.dat[,'Pair'])
+passes <- unique(Example1.dat[,'Pass'])
+SinglePass.dat <- Example1.dat[Example1.dat[,'Pass']==passes[1],]
+write.csv(SinglePass.dat, file='SinglePass.csv')
+```
+
+Read an plot the example.
+```{r}
+SinglePass.dat <- read.csv('./data/SinglePass.csv', header=TRUE)
+plot(Yield ~ Easting, type='l', data=SinglePass.dat)
+```
+
+# mgcv and knots
+
+```{r}
+knots = 3:30
+library(mgcv)
+sum <- 0
+OCV <- c()
+
+# gam library smoothing splits
+for(i in knots) {
+  current.gam <- gam(Yield ~ s(Easting, ,bs="bs", k=i), data=SinglePass.dat)
+
+#  PredictionsGAMGAM.dat[,'Yield'][PredictionsGAMGAM.dat[,'Knots']==knots[i]] = predict(current.lm)
+ # mask <- SplitsComp.dat[,'Knots'] == knots[i] & SplitsComp.dat[,'Method'] == 'gam smoothing spline'
+  sum <- 0
+  for(j in 1:dim(SinglePass.dat)[1]) {
+    current.d <- SinglePass.dat[-j,]
+    #this gives us an error on predict
+    ##current.model <- gam(Yield ~ s(Easting, df=knots[i]+3), data=current.d)
+    current.model <- update(current.gam, data =current.d)
+    new.dat <- SinglePass.dat[j,]
+    predicted <- predict(current.model, newdata = new.dat)
+    diff <- predicted - new.dat[,'Yield']
+    sum  <- sum+(diff)^2
+  }
+  OCV <- c(OCV, sum/dim(SinglePass.dat)[1])
+}
+```
+
+
+```{r}
+plot(OCV ~ knots)
+```
+
+# A bit about bases.
+
+To get the basis matrix used by `mgcv`, we can use the `smoothCon` function. The value returned by this function will have a basis matrix $X$. We wish compare the basis function to understand how the smoothers are computed.
+
+```{r}
+res <- smoothCon(s(Easting,bs="bs"),SinglePass.dat)[[1]]
+image(res$X)
+```
+
+```{r}
+res <- smoothCon(s(Easting,bs="ps"),SinglePass.dat)[[1]]
+image(res$X)
+```
+
+Compare the `mgcv` bases with similar basis from `mgcv`, using two different libraries.
+```{r}
+library(splines)
+bs_basis <- bs(SinglePass.dat$Easting, df = 10)
+image(bs_basis)
+
+library(splines2)
+bs_basis_splines2 <- bSpline(SinglePass.dat$Easting, df = 10)
+image(bs_basis_splines2)
+```
+
+
+# gam and knots
+
+According to Hastie (Statistical Models in S), the default `df` to the `s` term is 4, which seems odd, since it appeared that the default number of knots (in my thesis) is 3.
+```{r}
+knots = 3:30
+library(gam)
+sum <- 0
+OCV <- c()
+
+# gam library smoothing splits
+for(i in knots) {
+  current.gam <- gam(Yield ~ s(Easting, df=i), data=SinglePass.dat)
+  sum <- 0
+  for(j in 1:dim(SinglePass.dat)[1]) {
+    current.d <- SinglePass.dat[-j,]
+    #this gives us an error on predict
+    ##current.model <- gam(Yield ~ s(Easting, df=knots[i]+3), data=current.d)
+    current.model <- update(current.gam, data =current.d)
+    new.dat <- SinglePass.dat[j,]
+    predicted <- predict(current.model, newdata = new.dat)
+    diff <- predicted - new.dat[,'Yield']
+    sum  <- sum+(diff)^2
+  }
+  OCV <- c(OCV, sum/dim(SinglePass.dat)[1])
+}
+```
+
+```{r}
+plot(OCV ~ knots)
+```
+
+So we see that the relationship between degrees of freedom for the basis smoothers and the OCV score is smooth for the `gam` library, as we might expect, while the comparable OCV-effective degrees of freedom curve for `mgcv` is not. This is a little troubling.
