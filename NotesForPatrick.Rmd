@@ -59,7 +59,8 @@ In our exploration of the workings of `mgcv`, we start with a smoother only mode
 x <- Yield214$Northing
 y <- Yield214$Yield
 library(mgcv)
-#gam14 <- gam(Yield ~ Product + s(Northing), data=Yield214)
+#gam14 <- gam(Yield ~ Product + s(Northing, bs='bs'), data=Yield214)
+#gam14 <- gam(Yield ~ s(Northing, bs='bs'), data=Yield218)
 gam14 <- gam(Yield ~ s(Northing, bs='bs'), data=Yield214)
 #gam.check(gam14)
 coef(gam14)
@@ -95,7 +96,7 @@ plot(x,y)
 lines(x,predicted_values)
 ```
 
-We can simplify this an compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf(y}).
+We can simplify this an compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf{y}$.
 
 ```{r}
 beta.hat <- solve(t(X) %*% X) %*% t(X) %*% y
@@ -239,13 +240,42 @@ lines(Yield216$Northing,predict(gam16.bs),col='red')
 lines(Yield218$Northing,predict(gam18.bs),col='blue')
 ```
 
+#Penalized splines
+
 ```{r}
-gam14.ps <- gam(Yield ~ Product + s(Northing,bs="ps"), data=Yield214)
-gam16.ps <- gam(Yield ~ Product + s(Northing,bs="ps"), data=Yield216)
+gam14.ps <- gam(Yield ~ s(Northing,bs="ps"), data=Yield214)
+gam16.ps <- gam(Yield ~ s(Northing,bs="ps"), data=Yield216)
+gam18.ps <- gam(Yield ~ s(Northing,bs="ps"), data=Yield218)
 ```
 
 ```{r}
 plot(Yield214$Northing,predict(gam14.ps),type='l')
 lines(Yield216$Northing,predict(gam16.ps),col='red')
+lines(Yield218$Northing,predict(gam18.ps),col='blue')
 ```
 
+#CR (cubic regression?)
+
+```{r}
+gam14.cr <- gam(Yield ~ s(Northing,bs="cr"), data=Yield214)
+gam16.cr <- gam(Yield ~ s(Northing,bs="cr"), data=Yield216)
+gam18.cr <- gam(Yield ~ s(Northing,bs="cr"), data=Yield218)
+```
+
+```{r}
+plot(Yield214$Northing,predict(gam14.cr),type='l')
+lines(Yield216$Northing,predict(gam16.cr),col='red')
+lines(Yield218$Northing,predict(gam18.cr),col='blue')
+```
+
+```{r}
+gam14.prod.cr <- gam(Yield ~ Product + s(Northing,bs="cr"), data=Yield214)
+gam16.prod.cr <- gam(Yield ~ Product + s(Northing,bs="cr"), data=Yield216)
+gam18.prod.cr <- gam(Yield ~ Product + s(Northing,bs="cr"), data=Yield218)
+```
+
+```{r}
+plot(Yield214$Northing,predict(gam14.prod.cr),type='l')
+lines(Yield216$Northing,predict(gam16.prod.cr),col='red')
+lines(Yield218$Northing,predict(gam18.prod.cr),col='blue')
+```
