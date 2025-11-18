@@ -78,12 +78,16 @@ res <- smoothCon(s(Easting,bs="ps"),SinglePass.dat)[[1]]
 image(res$X)
 ```
 
-Compare the `mgcv` bases with similar basis from `mgcv`, using two different libraries.
+Compare the `mgcv` bases with similar basis from other libraries, starting with `splines`.
 ```{r}
 library(splines)
 bs_basis <- bs(SinglePass.dat$Easting, df = 10)
 image(bs_basis)
+```
 
+According to the documentation, `splines2` provides for additional spline bases, and that the `bSpline` function extends the `bs` from `splines`. As we see below for ordinary cubic splines, there is no difference in the bases.
+
+```{r}
 library(splines2)
 bs_basis_splines2 <- bSpline(SinglePass.dat$Easting, df = 10)
 image(bs_basis_splines2)

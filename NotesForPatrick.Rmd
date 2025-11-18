@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-Enter data for Easting smoothed yield estimates evaluated at 214m and 216m
+Enter data for Easting smoothed yield estimates evaluated at 214m, 216m and 218m.
 
 ```{r}
 Yield214 <- data.frame(
@@ -52,23 +52,64 @@ Yield218 <- data.frame(
 )
 ```
 
+# Smooth only models
+
+In our exploration of the workings of `mgcv`, we start with a smoother only model. We also want to work specifically with a `$b$-spline bases.
 ```{r}
+x <- Yield214$Northing
+y <- Yield214$Yield
 library(mgcv)
-gam14 <- gam(Yield ~ Product + s(Northing), data=Yield214)
-gam.check(gam14)
+#gam14 <- gam(Yield ~ Product + s(Northing), data=Yield214)
+gam14 <- gam(Yield ~ s(Northing, bs='bs'), data=Yield214)
+#gam.check(gam14)
 coef(gam14)
 summary(gam14)
-gam14.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield214)
-gam.check(gam14.int)
-coef(gam14.int)
-summary(gam14.int)
+#gam14.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield214)
+#gam.check(gam14.int)
+#coef(gam14.int)
+#summary(gam14.int)
+```
+
+We first want the $\mathbf{X}$ matrix. According to Google AI, this is extracted by
+```{r}
+X <- predict(gam14, type = "lpmatrix")
+dim(X)
+X
+image(predict(gam14, type = "lpmatrix"))
+```
+```{r}
+plot(x,X[,1],ylim=c(-.5,1),xlim=c(-10,150),type='l')
+for(i in 2:dim(X)[2]) {
+  lines(x,X[,i])
+}
+```
+
+Quoting from Google AI, 
+> This lp_matrix is the matrix of basis functions evaluated at each data point.
+
+Further, predicted values are obtained by
+```{r}
+coeffs <- coef(gam14)
+predicted_values <- X %*% coeffs
+plot(x,y)
+lines(x,predicted_values)
+```
+
+We can simplify this an compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf(y}).
+
+```{r}
+beta.hat <- solve(t(X) %*% X) %*% t(X) %*% y
+beta.hat
+y.hat <- X %*% beta.hat
+plot(x,y)
+lines(x,y.hat)
 ```
 
 According to Google AI, `$sp` is $\lambda$
 
 ```{r}
 gam14$sp
-gam14.int$sp
+#gam14.int$sp
 ```
 
 According to Google AI, we get the $S$ matrix by `$smooth[[1]]$S`
@@ -87,27 +128,20 @@ model.matrix(gam14)
 image(model.matrix(gam14))
 ```
 
-According to Google AI, this is the code to extract the $X$ matrix
-
-```{r}
-predict(gam14, type = "lpmatrix")
-image(predict(gam14, type = "lpmatrix"))
-```
-
 ```{r}
 gam16 <- gam(Yield ~ Product + s(Northing), data=Yield216)
 gam.check(gam16)
 coef(gam16)
 summary(gam16)
-gam16.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield216)
-gam.check(gam16.int)
-coef(gam16.int)
-summary(gam16.int)
+#gam16.int <- gam(Yield ~ Product + s(Northing,by=Product), data=Yield216)
+#gam.check(gam16.int)
+#coef(gam16.int)
+#summary(gam16.int)
 ```
 
 ```{r}
 gam16$sp
-gam16.int$sp
+#gam16.int$sp
 ```
 
 ```{r}
