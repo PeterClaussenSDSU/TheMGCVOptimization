@@ -1,0 +1,369 @@
+---
+title: "Notes fon MGCV"
+author: "Peter Claussen"
+date: "2025-09-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Introduction
+
+My desire was to analyze on-farm strip trials, specifically, applied to split-planter trials. In a split-planter trial, one side (half) of the planter was filled with one variety, the other side with a different variety. This is a commonly used method to provide side-by-side comparisons of two cultivars in a production agricultural setting.
+
+I wanted to determine if functional data analysis was applicable to these kind of data. In the first step of functional data analysis, individual harvest passes are `smoothed` with functional forms to remove measurement noise and to provide yield measurements on a common support. That is, we have strips running from east to west with measurements taken at 1 second intervals, which translates to 2-4m intervals depending on harvester speed. By providing functional forms, we can estimate yield at fixed distances from an origin, with these data at the south-west corner. 
+
+This leads to a pointwise analysis at 2 meter intervals. If the location of the varieties could be randomized within planter passes, then a point-wise $t$-test could be performed; that is, a $t$-test at 2m from the SW corner (`Easting`), a $t$-test as 4m `Easting`, etc. However, the varieties were not randomized, so instead I attempted pointwise additive models of the form
+
+$$
+f_i(z_i) = \tau_i + s_j(x_j) + e_{ij}
+$$
+
+$f_i(z_i)$ is the functional form for yield for strip $i$ at `Easting` position $j$ fit over support $z_i$; $z_i$ are points in distance `Easting` in the range ${2-399}$ by increments of $2$. The details of how $f_i(z_i)$ are evaluated are documented in my thesis and will not be considered in this document. 
+
+$\tau_i$ is a dummy variable indicating variety planted for strip $i$ and $s_i$ is the function form of a spatial trend evaluated at `Northing` position $x_i$. 
+
+When I fit an additive model over 199 yield estimates taken over 398 meters using the `mgcv` library `gam` function, I found some discontinuities in the results - that is, the coefficients for `Product` at two adjacent $i$ suggested a discontinuity, where the $f_i(z_i})$ were smooth. For this document, we consider the trend analysis at `Easting` position ${214, 216, 218}$ meters. Further, we will refer to sections from Wood (2107) - Wood is the author of the `mgcv` library - to cite sources for mathematical formula in this document.
+
+To illustrate, we first enter yield estimates $f_i(z_i)$ (`Yield`) for three data sets, at 214m, 216m and 218m `Easting`. These will be labelled `Yield214`, `Yield216` and `Yield218`. The variety associated with each yield estimate is labeled `B` or `E`, and the position of the strip $i$ from the SW corner of the field is labeled `Northing`. For brevity, the data have been round to 2 significant digits; the original analysis retained 12 significant digits.
+
+```{r}
+ExampleTrends <- data.frame(
+  Yield214 = c(142.31, 134.81, 133.43, 161.48, 165.27, 158.37,166.50, 181.42, 133.90, 134.82, 157.19, 172.50,
+               165.11, 158.90, 183.32, 186.36, 176.14, 188.85, 191.30, 187.47, 173.79, 190.24, 193.80, 203.20),
+  Yield216 = c(139.23, 131.54, 129.14, 156.49, 163.64, 156.16, 165.86, 180.22, 132.07, 133.01, 156.96, 173.26, 
+               164.79, 159.06, 182.33, 185.08, 174.53, 187.33, 189.86, 186.67, 174.97, 192.25, 194.59, 204.65),
+  Yield218 = c(136.36, 128.52, 125.21, 151.77, 162.12, 154.10, 165.48, 179.24, 130.66, 131.58, 156.98, 174.06, 
+               164.57, 159.277, 181.327, 183.70, 172.94, 185.65, 188.34, 185.76, 176.04, 194.20, 195.39, 206.09),
+  Product = factor(c("E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B", "E", "E", "B", "B",
+            "E", "E", "B", "B")),
+  Northing = c(0.78, 6.86, 13.00, 19.10, 25.18, 31.31, 37.32, 43.46, 49.50, 55.64, 61.64, 67.74, 73.76, 
+               79.91, 86.01, 92.1, 98.15, 104.31, 110.34, 116.43, 122.45, 128.54, 134.52, 140.68)
+)
+```
+
+# The problem.
+
+We plot the yield estimates by `Northing` for 214m, 216m and 218m. Notice that the data points are near to each other for most of the trend.
+
+```{r}
+yMin <- min(c(ExampleTrends$Yield214,ExampleTrends$Yield216,ExampleTrends$Yield218))
+yMax <- max(c(ExampleTrends$Yield214,ExampleTrends$Yield216,ExampleTrends$Yield218))
+plot(Yield214 ~ Northing, col = 'blue',ylim=c(yMin,yMax), pch = 16, data=ExampleTrends)
+points(Yield216 ~ Northing, col = 'red', pch = 16, data=ExampleTrends)
+points(Yield218 ~ Northing, col = 'green', pch = 16, data=ExampleTrends)
+legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
+```
+
+We should expect the trend fit using the `mgcv` library to be similar to for both data sets. `mgcv` defaults to thin-plate splines. First, we fit a smoother-only model, with no fixed effect for `Product`, and plot the results along with the data points.
+
+
+```{r}
+library(mgcv)
+gam14.smooth <- gam(Yield214 ~ s(Northing), data=ExampleTrends)
+gam16.smooth <- gam(Yield216 ~ s(Northing), data=ExampleTrends)
+gam18.smooth <- gam(Yield218 ~ s(Northing), data=ExampleTrends)
+
+plot(Yield214 ~ Northing, col = 'blue',ylim=c(yMin,yMax), pch = 16, data=ExampleTrends)
+points(Yield216 ~ Northing, col = 'red', pch = 16, data=ExampleTrends)
+points(Yield218 ~ Northing, col = 'green', pch = 16, data=ExampleTrends)
+lines(ExampleTrends$Northing, predict(gam14.smooth), col='blue')
+lines(ExampleTrends$Northing, predict(gam16.smooth), col='red')
+lines(ExampleTrends$Northing, predict(gam18.smooth), col='green')
+legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
+```
+This is very strange behavior. The fitting suggests a strictly linear trend, but we should expect some curvature to the smoothing model. When we include a fixed effect parameter, we do see curvature.
+
+```{r}
+gam14.prod <- gam(Yield214 ~ Product + s(Northing), data=ExampleTrends)
+gam16.prod <- gam(Yield216 ~ Product + s(Northing), data=ExampleTrends)
+gam18.prod <- gam(Yield218 ~ Product + s(Northing), data=ExampleTrends)
+
+plot(Yield214 ~ Northing, col = 'blue',ylim=c(yMin,yMax), pch = 16, data=ExampleTrends)
+points(Yield216 ~ Northing, col = 'red', pch = 16, data=ExampleTrends)
+points(Yield218 ~ Northing, col = 'green', pch = 16, data=ExampleTrends)
+lines(ExampleTrends$Northing, predict(gam14.prod), col='blue')
+lines(ExampleTrends$Northing, predict(gam16.prod), col='red')
+lines(ExampleTrends$Northing, predict(gam18.prod), col='green')
+legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
+```
+This is only slightly better. We see a nonlinear trend for the data from 214m, but still fit a linear trend to 216m and 218m. Before we dig into the details, perhaps the problem is in thin-plate splines. We will have an easier time working with simpler b-splines.
+
+```{r}
+gam14.smooth.bs <- gam(Yield214 ~ s(Northing, bs='bs'), data=ExampleTrends)
+gam16.smooth.bs <- gam(Yield216 ~ s(Northing, bs='bs'), data=ExampleTrends)
+gam18.smooth.bs <- gam(Yield218 ~ s(Northing, bs='bs'), data=ExampleTrends)
+
+plot(Yield214 ~ Northing, col = 'blue',ylim=c(yMin,yMax), pch = 16, data=ExampleTrends)
+points(Yield216 ~ Northing, col = 'red', pch = 16, data=ExampleTrends)
+points(Yield218 ~ Northing, col = 'green', pch = 16, data=ExampleTrends)
+lines(ExampleTrends$Northing, predict(gam14.smooth.bs), col='blue')
+lines(ExampleTrends$Northing, predict(gam16.smooth.bs), col='red')
+lines(ExampleTrends$Northing, predict(gam18.smooth.bs), col='green')
+legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
+```
+So, unlike thin-plate splines which found strictly linear trends for the smoother-only model, we see that when using b-splines we find a non-linear trend for 214m. Next, we add `Product` to the model.
+
+```{r}
+gam14.prod.bs <- gam(Yield214 ~ Product + s(Northing, bs='bs'), data=ExampleTrends)
+gam16.prod.bs <- gam(Yield216 ~ Product + s(Northing, bs='bs'), data=ExampleTrends)
+gam18.prod.bs <- gam(Yield218 ~ Product + s(Northing, bs='bs'), data=ExampleTrends)
+
+plot(Yield214 ~ Northing, col = 'blue',ylim=c(yMin,yMax), pch = 16, data=ExampleTrends)
+points(Yield216 ~ Northing, col = 'red', pch = 16, data=ExampleTrends)
+points(Yield218 ~ Northing, col = 'green', pch = 16, data=ExampleTrends)
+lines(ExampleTrends$Northing, predict(gam14.prod.bs), col='blue')
+lines(ExampleTrends$Northing, predict(gam16.prod.bs), col='red')
+lines(ExampleTrends$Northing, predict(gam18.prod.bs), col='green')
+legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
+```
+Using b-splines, then, we find non-linear trends for 214m and 216m, but not for 218m. So, now we examine the details of the `mgcv` `gam` algorithm.
+
+
+# Smooth only models
+
+In our exploration of the workings of `mgcv`, we start with a smoother only model. We will compare `gam14.smooth.bs` and `gam16.smooth.bs`. 
+
+Now, for theory. In section 4.2.2 Wood compares models fit using ordinary least squares criteria
+$$
+\lVert \mathbf{y} - \mathbf{X}\mathbf{\beta} \rVert^2
+$$
+to a penalized model of the form
+$$
+\lVert \mathbf{y} - \mathbf{X}\mathbf{\beta} \rVert^2 + \lambda \sum_{j=2}^{k-1} \left\{ f(x^*_{j-1} - 2f(x^*_j) + f(x^*_{j+1})\right\}^2
+$$
+where $x^*$ are knots. Note that the additional term is a squared second-difference numerical approximation to $\int f''(x)^2 dx$ (section 5.1.2, p 198), and provides a penalty for the 'wiggliness' of the function form. When $\lambda$ is small there is little penalty for wiggliness, while for larger $\lambda$ smooth functions are preferred.
+
+Further, in on p. 168, Wood suggest that the penalty can take the form $\beta^t \mathbf{S} \beta$, where $\mathbf{S} = \mathbf{D}^t \mathbf{D}$. $\mathbf{D}$ is the coefficients of the second differences, thus the problem of finding coefficients $\beta$ for the smoother takes the form
+
+$$
+\lVert \mathbf{y} - \mathbf{X}\mathbf{\beta} \rVert^2 + \lambda \beta^t \mathbf{S} \beta
+$$
+
+
+Then the estimate $\widehat{\beta}$ (p168) is found by
+
+$$
+\widehat{\mathbf{\beta}} = \left( \mathbf{X}^t \mathbf{X} + \lambda \mathbf{S} \right)^{-1} \mathbf{X}^t\mathbf{y}
+$$
+
+Wood (p168)argues that for computation, these matrices should be replaced by orthogonal matrix methods for stability. But for our purposes, here we consider $\mathbf{X}$, $\mathbf{S}$ and $\lambda$. First, for simplicity we'll define \mathbf{x} and \mathbf{y} vectors. The $x$ vector can be shared by different models, while the $y$ are unique for each curve
+```{r}
+x <- ExampleTrends$Northing
+y14 <- ExampleTrends$Yield214
+y16 <- ExampleTrends$Yield216
+y18 <- ExampleTrends$Yield218
+```
+
+We first want the $\mathbf{X}$ matrix. According to Google AI, this is extracted by
+```{r}
+X <- predict(gam14.smooth.bs, type = "lpmatrix")
+```
+
+Quoting from Google AI, 
+
+> This lp_matrix is the matrix of basis functions evaluated at each data point.
+
+```{r}
+dim(X)
+X
+image(X)
+```
+
+```{r}
+plot(x,X[,1],ylim=c(-.5,1),xlim=c(-10,150),type='l')
+for(i in 2:dim(X)[2]) {
+  lines(x,X[,i])
+}
+```
+
+Note, though, that the knots extend beyond the range of `Northing`
+
+```{r}
+gam14.smooth.bs$knots
+```
+
+Further, predicted values are obtained by
+
+```{r}
+coeffs <- coef(gam14.smooth.bs)
+predicted_values <- X %*% coeffs
+plot(x,y14)
+lines(x,predicted_values)
+```
+
+We can simplify this an compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf{y}$.
+
+```{r}
+beta.hat <- solve(t(X) %*% X) %*% t(X) %*% y14
+beta.hat
+y14.hat <- X %*% beta.hat
+plot(x,y14)
+lines(x,y14.hat)
+```
+
+According to Google AI, $\lambda$ is saved as `$sp` in the `mgcv` object. 
+
+```{r}
+gam14.smooth.bs$sp
+gam16.smooth.bs$sp
+```
+
+According to Google AI, we get the $S$ matrix by `$smooth[[1]]$S`
+
+```{r}
+S <- gam14.smooth.bs$smooth[[1]]$S[[1]]
+S
+image(S)
+plot(S[,1],ylim=c(-.5,.5),type='l')
+for(i in 2:dim(S)[2]) {
+  lines(S[,i])
+}
+```
+
+According to Google, "D matrix mgcv", a D or design matrix can be obtained by calling `model.matrix.gam`. But this isn't quite right, it looks like the `X` matrix from above. From above, `S` for these data is a 9x9 matrix.
+
+```{r}
+D <- model.matrix.gam(gam14.smooth.bs)
+plot(x,D[,1],ylim=c(-.5,1),type='l')
+for(i in 2:dim(D)[2]) {
+  lines(x,D[,i])
+}
+t(D) %*% D
+image(t(D) %*% D)
+```
+
+
+There is, however a `D` matrix return from `smooth`. When square, `D` produces a matrix of the correct dimensions.
+
+```{r}
+D <- gam14.smooth.bs$smooth[[1]]$D[[1]]
+dim(D)
+```
+
+```{r}
+plot(D[,1],ylim=c(-.02,.01), type='l')
+for(i in 2:dim(D)[2]) {
+  lines(D[,i])
+}
+```
+
+Back to `S`. We can compute an unweighted penalized least squares using $\mathbf{S}$ by
+
+$$
+\left( \mathbf{X}^t \mathbf{X} + \lambda \mathbf{S} \right) \beta = \mathbf{X}^t \mathbf{y}
+$$
+
+But the `S` we extract from the `gam` model above is 9x9, while `t(X) %*% X` is 10x10, so this code won't work.
+
+```{r,eval=FALSE}
+lambda = 1
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% t(X) %*% y14
+y14.hat <- X %*% beta.hat
+plot(x,y14)
+lines(x,y14.hat)
+```
+
+But if we substitute `D`, then
+```{r}
+S <- t(D) %*% D
+lambda = 1.478579 
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% t(X) %*% y14
+y14.hat <- X %*% beta.hat
+plot(x,y14)
+lines(x,y14.hat)
+```
+
+```{r}
+lambda = 48451.31 
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% t(X) %*% y14
+y14.hat <- X %*% beta.hat
+plot(x,y14)
+lines(x,y14.hat)
+```
+
+
+Wood (p168) also briefly comments on the influence matrix $\mathbf{A}$, such that $\widehat{\mathbf{\mu}} =  \mathbf{X}\mathbf{y}$ According to Google AI, the $A$ matrix can be extract using `model.matrix`
+
+```{r}
+A <- model.matrix(gam14.smooth.bs)
+image(A)
+```
+
+Now, we should expect that the $X$ matrices be identical for the two models `gam14.smooth.bs` and `gam16.smooth.bs`, since they use the same knots and model rank.
+
+```{r}
+X14 <- predict(gam14.smooth.bs, type = "lpmatrix")
+X16 <- predict(gam16.smooth.bs, type = "lpmatrix")
+sum((X16-X14)^2)
+```
+
+Now consider the $S$ matrix.
+
+```{r}
+image(gam14.smooth.bs$smooth[[1]]$S[[1]])
+image(gam16.smooth.bs$smooth[[1]]$S[[1]])
+```
+
+
+It may be that the GCV algorithm is forcing $\lambda$ to be unreasonable.
+
+```{r}
+gam14.smooth.bs$sp
+coef(gam14.smooth.bs)
+gam16.smooth.bs$sp
+coef(gam16.smooth.bs)
+```
+
+# IRLS
+According to Google AI, `gam` does not explicity return the weights matrix $W$. According to https://cran.r-project.org/web/packages/mgcv/mgcv.pdf, `weights` are the final weights of the IRLS algorithm.
+
+```{r}
+gam14.smooth.bs$weights
+gam14.smooth.bs$weights
+```
+
+We find that for the gaussian case, weights are not used, so the algorithm to fit the data does not need to be IRLS. So for further exploration, we can use the penalized least squares model.
+
+#Penalized splines
+
+```{r}
+gam14.ps <- gam(Yield214 ~ s(Northing,bs="ps"), data=ExampleTrends)
+gam16.ps <- gam(Yield216 ~ s(Northing,bs="ps"), data=ExampleTrends)
+gam18.ps <- gam(Yield218 ~ s(Northing,bs="ps"), data=ExampleTrends)
+```
+
+```{r}
+plot(ExampleTrends$Northing,predict(gam14.ps),type='l',col='blue')
+lines(ExampleTrends$Northing,predict(gam16.ps),col='red')
+lines(ExampleTrends$Northing,predict(gam18.ps),col='green')
+```
+
+#CR (cubic regression?)
+
+```{r}
+gam14.cr <- gam(Yield214 ~ s(Northing,bs="cr"), data=ExampleTrends)
+gam16.cr <- gam(Yield216 ~ s(Northing,bs="cr"), data=ExampleTrends)
+gam18.cr <- gam(Yield218 ~ s(Northing,bs="cr"), data=ExampleTrends)
+```
+
+```{r}
+plot(ExampleTrends$Northing,predict(gam14.cr),type='l',col='blue')
+lines(ExampleTrends$Northing,predict(gam16.cr),col='red')
+lines(ExampleTrends$Northing,predict(gam18.cr),col='green')
+```
+
+```{r}
+gam14.prod.cr <- gam(Yield214 ~ Product + s(Northing,bs="cr"), data=ExampleTrends)
+gam16.prod.cr <- gam(Yield216 ~ Product + s(Northing,bs="cr"), data=ExampleTrends)
+gam18.prod.cr <- gam(Yield218 ~ Product + s(Northing,bs="cr"), data=ExampleTrends)
+```
+
+```{r}
+plot(ExampleTrends$Northing,predict(gam14.prod.cr),type='l',col='blue')
+lines(ExampleTrends$Northing,predict(gam16.prod.cr),col='red')
+lines(ExampleTrends$Northing,predict(gam18.prod.cr),col='green')
+```
+
+
