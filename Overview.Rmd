@@ -88,6 +88,7 @@ lines(ExampleTrends$Northing, predict(gam16.prod), col='red')
 lines(ExampleTrends$Northing, predict(gam18.prod), col='green')
 legend("topleft", legend = c("214m","216m","218m"), pch = 16, col=c("blue","red","green"))
 ```
+
 This is only slightly better. We see a nonlinear trend for the data from 214m, but still fit a linear trend to 216m and 218m. Before we dig into the details, perhaps the problem is in thin-plate splines. We will have an easier time working with simpler b-splines.
 
 ```{r}
@@ -172,16 +173,16 @@ image(X)
 ```
 
 ```{r}
-plot(x,X[,1],ylim=c(-.5,1),xlim=c(-10,150),type='l')
+plot(x,X[,1],ylim=c(-.5,1),xlim=c(-10,150),type='l',col=1)
 for(i in 2:dim(X)[2]) {
-  lines(x,X[,i])
+  lines(x,X[,i],col=i)
 }
 ```
 
 Note, though, that the knots extend beyond the range of `Northing`
 
 ```{r}
-gam14.smooth.bs$knots
+gam14.smooth.bs$smooth[[1]]$knots
 ```
 
 Further, predicted values are obtained by
@@ -193,7 +194,7 @@ plot(x,y14)
 lines(x,predicted_values)
 ```
 
-We can simplify this an compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf{y}$.
+We can simplify this and compute an unpenalized fit by $\widehat{\beta} = \left(\mathbf{X}^t \mathbf{X}\right)^{-1} \mathbf{X}^t \mathbf{y}$.
 
 ```{r}
 beta.hat <- solve(t(X) %*% X) %*% t(X) %*% y14
@@ -202,13 +203,17 @@ y14.hat <- X %*% beta.hat
 plot(x,y14)
 lines(x,y14.hat)
 ```
+Note that this fit is more 'wiggly' when compared to the penalized fits from `mgcv`.
 
 According to Google AI, $\lambda$ is saved as `$sp` in the `mgcv` object. 
 
 ```{r}
 gam14.smooth.bs$sp
 gam16.smooth.bs$sp
+gam18.smooth.bs$sp
 ```
+We find very different $\lambda$ for these data, even though the data points nearly overlap.
+
 
 According to Google AI, we get the $S$ matrix by `$smooth[[1]]$S`
 
@@ -216,26 +221,25 @@ According to Google AI, we get the $S$ matrix by `$smooth[[1]]$S`
 S <- gam14.smooth.bs$smooth[[1]]$S[[1]]
 S
 image(S)
-plot(S[,1],ylim=c(-.5,.5),type='l')
+plot(S[,1],ylim=c(-.5,.5),type='l',col=1)
 for(i in 2:dim(S)[2]) {
-  lines(S[,i])
+  lines(S[,i],col=i)
 }
 ```
 
-According to Google, "D matrix mgcv", a D or design matrix can be obtained by calling `model.matrix.gam`. But this isn't quite right, it looks like the `X` matrix from above. From above, `S` for these data is a 9x9 matrix.
+According to Google, "D matrix mgcv", a D or design matrix can be obtained by calling `model.matrix.gam`. But this isn't quite right, it looks like the `X` matrix from above.
 
 ```{r}
 D <- model.matrix.gam(gam14.smooth.bs)
-plot(x,D[,1],ylim=c(-.5,1),type='l')
+plot(x,D[,1],ylim=c(-.5,1),type='l',col=1)
 for(i in 2:dim(D)[2]) {
-  lines(x,D[,i])
+  lines(x,D[,i],col=i)
 }
 t(D) %*% D
 image(t(D) %*% D)
 ```
 
-
-There is, however a `D` matrix return from `smooth`. When square, `D` produces a matrix of the correct dimensions.
+There is, however a `D` matrix is returned as part of the `smooth` list. When square, `D` produces a matrix of the correct dimensions.
 
 ```{r}
 D <- gam14.smooth.bs$smooth[[1]]$D[[1]]
@@ -243,11 +247,35 @@ dim(D)
 ```
 
 ```{r}
-plot(D[,1],ylim=c(-.02,.01), type='l')
+plot(D[,1],ylim=c(-.02,.01), type='l',col=1)
 for(i in 2:dim(D)[2]) {
-  lines(D[,i])
+  lines(D[,i],col=i)
 }
 ```
+
+Compare this to the code from creating a `D` matrix from a penalized piecewise linear smoother, as shown in the function `prs.fit` on p 169. 
+
+First, we need to know how many knots. This can be extracted from the `mgcv` object using `$knots`.
+
+```{r}
+gam14.smooth.bs$smooth[[1]]$knots
+length(gam14.smooth.bs$smooth[[1]]$knots)
+```
+
+Now, the code from `prs.fit`:
+
+```{r}
+xj <- seq(min(x),max(x),length=8)
+xj
+D.169 <- diff(diag(length(xj)),differences=2)
+plot(D.169[,1],ylim=c(-2,1), type='l',col=1)
+for(i in 2:dim(D.169)[2]) {
+  lines(D.169[,i],col=i)
+}
+```
+
+This $\mathbf{D}$ looks reasonable, but looks very different than the `$D` member variable returned from `mgcv` as described above.
+
 
 Back to `S`. We can compute an unweighted penalized least squares using $\mathbf{S}$ by
 
@@ -265,24 +293,62 @@ plot(x,y14)
 lines(x,y14.hat)
 ```
 
-But if we substitute `D`, then
+
+
+But if we substitute `D`, (using values of $\lambda$ from the `mgcv` solutions) then, for the 214m data set (the data for which `mgcv` finds a non-linear curve), we find:
+
 ```{r}
 S <- t(D) %*% D
+```
+
+```{r}
 lambda = 1.478579 
-beta.hat <- solve(t(X) %*% X + lambda*S) %*% t(X) %*% y14
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% (t(X) %*% y14)
 y14.hat <- X %*% beta.hat
 plot(x,y14)
 lines(x,y14.hat)
 ```
+
+Now, for a larger $\lambda$ as found for the 216m data set (but using the same $\mathbf{y}$ from 214m) :
 
 ```{r}
 lambda = 48451.31 
-beta.hat <- solve(t(X) %*% X + lambda*S) %*% t(X) %*% y14
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% (t(X) %*% y14)
 y14.hat <- X %*% beta.hat
 plot(x,y14)
 lines(x,y14.hat)
 ```
 
+Finally, the very large $\lambda$ found for the 218m data set:
+```{r}
+lambda = 885002639564
+beta.hat <- solve(t(X) %*% X + lambda*S) %*% (t(X) %*% y14)
+y14.hat <- X %*% beta.hat
+plot(x,y14)
+lines(x,y14.hat)
+```
+
+The first plot looks reasonable, but the second two do not produce a linear trend as expected. Next step is to determine what I'm missing. Looking back, we see that the $\mathbf{S}$ matrix is very different from what we found in Python.
+
+```{r}
+plot(S[,1],ylim=c(-0.001,.001), type='l',col=1)
+for(i in 2:dim(S)[2]) {
+  lines(S[,i],col=i)
+}
+```
+
+So, what does the $D$ look like?
+```{r}
+plot(D[,1],ylim=c(-.03,.03), type='l',col=1)
+for(i in 2:dim(D)[2]) {
+  lines(D[,i],col=i)
+}
+```
+Note the magnitude of these columns; the numbers are very small compared with what we find in Python.
+I don't think the `D` returned with an `mgcv` object is the appropriate `D` for the linear algebra we're attempting here.
+
+
+# Other notes
 
 Wood (p168) also briefly comments on the influence matrix $\mathbf{A}$, such that $\widehat{\mathbf{\mu}} =  \mathbf{X}\mathbf{y}$ According to Google AI, the $A$ matrix can be extract using `model.matrix`
 
@@ -307,13 +373,15 @@ image(gam16.smooth.bs$smooth[[1]]$S[[1]])
 ```
 
 
-It may be that the GCV algorithm is forcing $\lambda$ to be unreasonable.
+It may be that the GCV algorithm is forcing $\lambda$ to be unreasonable. But does this affect the coefficients for the bases?
 
 ```{r}
 gam14.smooth.bs$sp
 coef(gam14.smooth.bs)
 gam16.smooth.bs$sp
 coef(gam16.smooth.bs)
+gam18.smooth.bs$sp
+coef(gam18.smooth.bs)
 ```
 
 # IRLS
@@ -321,12 +389,14 @@ According to Google AI, `gam` does not explicity return the weights matrix $W$. 
 
 ```{r}
 gam14.smooth.bs$weights
-gam14.smooth.bs$weights
+gam16.smooth.bs$weights
+gam18.smooth.bs$weights
 ```
 
 We find that for the gaussian case, weights are not used, so the algorithm to fit the data does not need to be IRLS. So for further exploration, we can use the penalized least squares model.
 
-#Penalized splines
+
+# Penalized splines
 
 ```{r}
 gam14.ps <- gam(Yield214 ~ s(Northing,bs="ps"), data=ExampleTrends)
@@ -340,7 +410,8 @@ lines(ExampleTrends$Northing,predict(gam16.ps),col='red')
 lines(ExampleTrends$Northing,predict(gam18.ps),col='green')
 ```
 
-#CR (cubic regression?)
+
+# CR (cubic regression?)
 
 ```{r}
 gam14.cr <- gam(Yield214 ~ s(Northing,bs="cr"), data=ExampleTrends)
