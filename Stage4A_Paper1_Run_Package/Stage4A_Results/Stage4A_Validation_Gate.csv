@@ -1,0 +1,10 @@
+"Check","PASS"
+"199 full-field input profiles",TRUE
+"One refinement per original dip",TRUE
+"All candidate evaluations finite",TRUE
+"Refined GCV not above grid dip",TRUE
+"All local neighborhood checks",TRUE
+"199 summary rows",TRUE
+"Best-evaluated <= automatic",TRUE
+"No fit errors",TRUE
+"Input manifest recorded",TRUE

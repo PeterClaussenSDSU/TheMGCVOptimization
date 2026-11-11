@@ -1,0 +1,10 @@
+Existing_Stage3C_Metric,Verified_Value
+Stage 3C Eastings,199
+Stage 3C grid rows,119400
+GCV nodes per Easting,600
+Grid-detected interior candidates,218
+Eastings with multiple interior candidates,28
+Stage 3C automatic inferior to grid,16
+Stage 3B automatic inferior to exact linear,6
+No interior candidate Eastings,10
+Finite-grid near-ties abs(interior - linear)<0.1,2
