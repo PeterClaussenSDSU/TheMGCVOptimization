@@ -1,0 +1,655 @@
+---
+title: "Full-field harvest GCV: Stage 2 manual reconstruction"
+subtitle: "Annotated Base R implementation, benchmark validation, and expected diagnostics"
+date: "2026-10-14"
+format:
+  html:
+    toc: true
+    number-sections: true
+execute:
+  echo: true
+  warning: true
+  message: true
+---
+
+# Stage 2 — Independent Base R full-field GCV
+
+**Research status:** This notebook is executable but its full-field results are **not yet observed**. The only accepted measurements are the Stage 1A/1B audit and the historical 214/216/218 benchmark outputs. The code intentionally stops if it does not reproduce those benchmarks.
+
+This is *not* an automatic `mgcv` optimizer test. It reconstructs the same manual spline model and GCV criterion as `GCV_Manual_Combined_Annotated.R`, now across all Eastings.
+
+## Why Stage 2 comes next
+
+The full CSV contains 199 Eastings and 24 common harvest passes. Stage 1B reconciled the 72 original Yield observations with differences no larger than about `4.01e-12`, showing that the full file can act as the new source for all response vectors. We can therefore hold the same design matrix and penalty fixed across Eastings, reducing the amount of repeated numerical work. This does **not** mean the observations across Eastings are independent.
+
+We fit, at each Easting $e$,
+
+$$Y_{i,e}=\beta_0(e)+\beta_B(e) I(P_i=B)+f_e(N_i)+\epsilon_{i,e},$$
+
+with $f_e$ represented by 10 manually constructed cubic B-splines and penalized via $\int [f_e''(N)]^2\,dN$. For fixed $\lambda$,
+
+$$\widehat{\boldsymbol\beta}_{\lambda,e}=(X^TX+\lambda S)^{-1}X^T\mathbf y_e,\qquad H_{\lambda}=X(X^TX+\lambda S)^{-1}X^T.$$
+
+We then calculate
+
+$$\mathrm{GCV}_e(\lambda)=\frac{24\|\mathbf y_e-H_{\lambda}\mathbf y_e\|^2}{[24-\operatorname{tr}(H_{\lambda})]^2}.$$
+
+**What the model does not establish:** A lower GCV is not necessarily a less biased Product-effect estimate; a finite grid cannot prove the unique global minimum; and the original `mgcv` knot placement and penalty normalization are different. Those questions belong to later stages.
+
+## Step 1. Set input and output paths
+
+This is intentionally **Base R only**, including the output paths. We preserve the same smoothing grid and flatness threshold that generated the historical manual CSVs. We do **not** call `setwd()`: running the notebook cannot alter the global working directory.
+
+**Expected:** All four CSV inputs exist; a new `02_Manual_Full_Field` directory is created. No output about the actual GCV landscape is expected yet.
+
+```{r stage2_step_1, echo=TRUE, warning=TRUE, message=TRUE}
+# STAGE 2 -- Independent Base R full-field manual GCV.
+# No packages are loaded and no custom functions are defined.
+# Source: exact construction of GCV_Manual_Combined_Annotated.R.
+# This script never edits the original three-slice research outputs.
+
+data_dir <- "C:/Users/pbbs/Claussen"
+full_file <- file.path(data_dir, "Example1SmoothHarvestPasses.csv")
+out_dir <- file.path(data_dir, "GCV_Full_Field_Project", "02_Manual_Full_Field")
+
+# The three historical input slices are retained as independent checkpoints.
+reference_eastings <- c(214, 216, 218)
+reference_files <- file.path(
+  data_dir,
+  paste0("Example1SmoothHarvestStrip", reference_eastings, ".csv")
+)
+
+stopifnot(file.exists(full_file), all(file.exists(reference_files)))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Use EXACTLY the settings of the verified manual three-slice program.
+k <- 10
+p_degree <- 3
+M <- 400
+log_lambda <- seq(-1, 23, length.out = M)
+lambda_grid <- exp(log_lambda)
+flat_tol <- 1.01
+
+cat("STAGE 2: beginning full-field Base R calculation.\n")
+cat("Input:", full_file, "\nOutput directory:", out_dir, "\n")
+```
+
+## Step 2. Read all 199 response vectors and establish a common design
+
+The first column of `Y` is Easting 2, and the final column is Easting 398; each row is a particular `PassNo`. The predictors `x` and `P` come from the fixed experimental design. This is the reason we can reuse $X$, $S$, and $H_\lambda$ across all slices.
+
+**Expected:** `Full response matrix: 24 x 199 (PASS)` and three reference Yield discrepancies near zero. The script stops on missing passes, treatment changes, or shifted spatial coordinates.
+
+```{r stage2_step_2, echo=TRUE, warning=TRUE, message=TRUE}
+full <- read.csv(full_file, stringsAsFactors = FALSE, check.names = TRUE)
+required <- c("Yield", "Easting", "PassNo", "Pair", "Product", "Northing", "Pass")
+stopifnot(all(required %in% names(full)))
+
+for (v in c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")) {
+  full[[v]] <- suppressWarnings(as.numeric(as.character(full[[v]])))
+}
+full$Product <- trimws(as.character(full$Product))
+stopifnot(all(is.finite(as.matrix(full[, c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")]))))
+stopifnot(all(full$Product %in% c("E", "B")))
+
+eastings <- seq(2, 398, by = 2)
+passes <- 1:24
+n_east <- length(eastings)
+n <- length(passes)
+stopifnot(nrow(full) == n * n_east)
+stopifnot(identical(sort(unique(full$Easting)), as.numeric(eastings)))
+stopifnot(!anyDuplicated(paste(full$Easting, full$PassNo, sep = "_")))
+
+# Y is 24 x 199: every column is one Easting, ordered by PassNo.
+Y <- matrix(NA_real_, nrow = n, ncol = n_east)
+colnames(Y) <- as.character(eastings)
+
+# The original slice code retained PassNo ascending (its input file order).
+# We choose the same order here, independent of the full CSV's row layout.
+d_ref <- full[full$Easting == reference_eastings[1], , drop = FALSE]
+d_ref <- d_ref[order(d_ref$PassNo), , drop = FALSE]
+stopifnot(identical(as.numeric(d_ref$PassNo), as.numeric(passes)))
+x <- as.numeric(d_ref$Northing)
+P <- as.numeric(d_ref$Product == "B")
+stopifnot(length(unique(x)) == n, sum(P) == 12)
+
+for (s in seq_along(eastings)) {
+  d <- full[full$Easting == eastings[s], , drop = FALSE]
+  d <- d[order(d$PassNo), , drop = FALSE]
+  stopifnot(nrow(d) == n,
+            identical(as.numeric(d$PassNo), as.numeric(passes)),
+            identical(as.numeric(d$Northing), x),
+            identical(as.numeric(d$Product == "B"), P),
+            identical(as.numeric(d$Pair), as.numeric(d_ref$Pair)),
+            identical(as.numeric(d$Pass), as.numeric(d_ref$Pass)))
+  Y[, s] <- as.numeric(d$Yield)
+}
+stopifnot(all(is.finite(Y)))
+
+# Recheck the original three-slice response columns at full numeric precision.
+for (s in seq_along(reference_eastings)) {
+  z <- read.csv(reference_files[s], check.names = TRUE)
+  z <- z[order(z$PassNo), , drop = FALSE]
+  j <- match(reference_eastings[s], eastings)
+  discrepancy <- max(abs(Y[, j] - as.numeric(z$Yield)))
+  cat("Reference Easting", reference_eastings[s],
+      "max yield discrepancy:", format(discrepancy, digits = 12), "\n")
+  stopifnot(discrepancy < 1e-8)
+}
+cat("Full response matrix:", nrow(Y), "x", ncol(Y), "(PASS).\n")
+```
+
+## Step 3. Build uniform knots and Cox–de Boor cubic basis
+
+The extended uniform knot sequence has 14 entries for 10 cubic B-spline basis functions. Cox–de Boor recursion builds the *same* $24\times10$ basis used in the three-slice reconstruction.
+
+**Expected:** partition-of-unity maximum error near $2.22\times10^{-16}$ and no failure of the `stopifnot()` check. This is an internal algebraic validation.
+
+```{r stage2_step_3, echo=TRUE, warning=TRUE, message=TRUE}
+  # ------------------ STEP 2: EXTENDED, UNIFORM KNOTS --------------------
+  # For degree p and k basis columns we need k+p+1 knot entries.
+  # Six strictly interior knots, two data endpoints, three added knots
+  # on EACH side: 3 + 8 + 3 = 14 total entries.
+  lo <- min(x)
+  hi <- max(x)
+  n_int <- k - p_degree - 1
+  h_knot <- (hi - lo) / (n_int + 1)
+  knots <- c(lo - h_knot * (p_degree:1),
+             lo + h_knot * (0:(n_int + 1)),
+             hi + h_knot * (1:p_degree))
+  stopifnot(length(knots) == k + p_degree + 1)
+
+  # ------------------ STEP 3: COX-DE BOOR, DATA BASIS -------------------
+  # Degree zero B_{i,0}(x) is 1 if t_i <= x < t_{i+1} and 0 otherwise.
+  # Cubic basis is obtained by three successive recursive updates:
+  # B_{i,p}(x) = (x-t_i)/(t_{i+p}-t_i) B_{i,p-1}(x)
+  #            + (t_{i+p+1}-x)/(t_{i+p+1}-t_{i+1}) B_{i+1,p-1}(x).
+  nb0 <- length(knots) - 1
+  B <- matrix(0, nrow = n, ncol = nb0)
+  for (i in 1:nb0) {
+    B[, i] <- as.numeric(x >= knots[i] & x < knots[i + 1])
+  }
+  # The maximum observed x lies on a knot; assign it to LEFT interval.
+  B[x == hi, ] <- 0
+  B[x == hi, p_degree + n_int + 1] <- 1
+
+  for (pp in 1:p_degree) {
+    ncol_new <- length(knots) - 1 - pp
+    Bnew <- matrix(0, nrow = n, ncol = ncol_new)
+    for (i in 1:ncol_new) {
+      dleft <- knots[i + pp] - knots[i]
+      dright <- knots[i + pp + 1] - knots[i + 1]
+      Bnew[, i] <- (x - knots[i]) / dleft * B[, i] +
+        (knots[i + pp + 1] - x) / dright * B[, i + 1]
+    }
+    B <- Bnew
+  }
+  stopifnot(ncol(B) == k)
+
+  # Internal check A: each row of a complete B-spline basis sums to one.
+  partition_error <- max(abs(rowSums(B) - 1))
+  cat('Basis partition-of-unity max error:', partition_error, '\n')
+  stopifnot(partition_error < 1e-10)
+```
+
+## Step 4. Assemble the integrated squared-second-derivative penalty
+
+The continuous curvature penalty is $S_{ij}=\int B_i''(x)B_j''(x)dx$, approximated with Simpson quadrature on each knot span. The output matrix has rank 8: its two-dimensional null space represents constant and linear functions.
+
+**Expected:** a symmetric penalty, rank 8 of 10, and no negative eigenvalue beyond the numerical tolerance. This is **not** a P-spline difference penalty.
+
+```{r stage2_step_4, echo=TRUE, warning=TRUE, message=TRUE}
+  # --------------- STEP 4: CONTINUOUS CURVATURE PENALTY ------------------
+  # Let f(x) = sum_j theta_j B_j(x).
+  # Then integral[f''(x)^2]dx = theta' S_smooth theta,
+  # with S_smooth[i,j] = integral B_i''(x) B_j''(x) dx.
+  # Cubic B'' is piecewise LINEAR; product of two B'' functions is a
+  # piecewise QUADRATIC. Simpson's rule is exact for a quadratic on each
+  # knot interval (in exact arithmetic).
+
+  # 4A. Three integration points for each span within observed range.
+  edges <- knots[knots >= lo - 1e-9 & knots <= hi + 1e-9]
+  qx <- numeric(0)
+  qw <- numeric(0)
+  for (a in 1:(length(edges) - 1)) {
+    a0 <- edges[a]
+    a1 <- edges[a + 1]
+    h <- a1 - a0
+    qx <- c(qx, a0, (a0 + a1) / 2, a1)
+    qw <- c(qw, h / 6, 4 * h / 6, h / 6)
+  }
+  nq <- length(qx)
+
+  # 4B. Construct only DEGREE ONE B-splines at integration points;
+  # twice differentiating the cubic basis reduces its degree from 3 to 1.
+  Bq <- matrix(0, nrow = nq, ncol = nb0)
+  for (i in 1:nb0) {
+    Bq[, i] <- as.numeric(qx >= knots[i] & qx < knots[i + 1])
+  }
+  for (pp in 1:1) {
+    ncol_new <- length(knots) - 1 - pp
+    Bnew <- matrix(0, nrow = nq, ncol = ncol_new)
+    for (i in 1:ncol_new) {
+      dleft <- knots[i + pp] - knots[i]
+      dright <- knots[i + pp + 1] - knots[i + 1]
+      Bnew[, i] <- (qx - knots[i]) / dleft * Bq[, i] +
+        (knots[i + pp + 1] - qx) / dright * Bq[, i + 1]
+    }
+    Bq <- Bnew
+  }
+  B1 <- Bq
+
+  # 4C. B'_{i,p}(x) = p*[B_{i,p-1}/(t_{i+p}-t_i)
+  #                       - B_{i+1,p-1}/(t_{i+p+1}-t_{i+1})].
+  # dB2 = FIRST derivative of quadratic basis; d2B = SECOND derivative
+  # of cubic basis. Despite the names, these have the right dimensions.
+  n2 <- length(knots) - 3
+  dB2 <- matrix(0, nrow = nq, ncol = n2)
+  for (i in 1:n2) {
+    dB2[, i] <- 2 * (B1[, i] / (knots[i + 2] - knots[i]) -
+                       B1[, i + 1] / (knots[i + 3] - knots[i + 1]))
+  }
+  n3 <- length(knots) - 4
+  d2B <- matrix(0, nrow = nq, ncol = n3)
+  for (i in 1:n3) {
+    d2B[, i] <- 3 * (dB2[, i] / (knots[i + 3] - knots[i]) -
+                       dB2[, i + 1] / (knots[i + 4] - knots[i + 1]))
+  }
+
+  # 4D. Compute every entry of the 10 x 10 penalty explicitly.
+  Ssmooth <- matrix(0, nrow = k, ncol = k)
+  for (i in 1:k) {
+    for (j in 1:k) {
+      Ssmooth[i, j] <- sum(qw * d2B[, i] * d2B[, j])
+    }
+  }
+
+  # Internal check B: S is symmetric and PSD with a two-dimensional
+  # nullspace (intercept and line), hence numerical rank k-2 = 8.
+  symmetry_error <- max(abs(Ssmooth - t(Ssmooth)))
+  eigenvalues <- eigen(Ssmooth, symmetric = TRUE, only.values = TRUE)$values
+  penalty_rank <- sum(eigenvalues > max(eigenvalues) * 1e-10)
+  cat('Penalty symmetry max error:', symmetry_error, '\n')
+  cat('Penalty numerical rank:', penalty_rank, 'of', k, '\n')
+  stopifnot(symmetry_error < 1e-10,
+            min(eigenvalues) > -1e-10,
+            penalty_rank == (k - 2))
+```
+
+## Step 5. Center the spline and construct X and S
+
+The centering constraint removes the spline's constant direction, so the smooth cannot duplicate the intercept. $X=[1,P,B_c]$ has 11 columns; only its spline block is penalized.
+
+**Expected:** centering error near $3.68\times10^{-16}$; $X$ has full column rank 11.
+
+```{r stage2_step_5, echo=TRUE, warning=TRUE, message=TRUE}
+  # --------------- STEP 5: IDENTIFIABILITY CONSTRAINT ------------------
+  # Model intercept and spline each contain a constant. Resolve this by
+  # requiring the fitted smooth to have zero sum over observed x values:
+  #  1' B theta = 0. Orthogonal complement Z enforces this constraint.
+  Q <- qr.Q(qr(matrix(colSums(B), ncol = 1)), complete = TRUE)
+  Z <- Q[, -1, drop = FALSE]
+  Bc <- B %*% Z                      # 24 by 9
+  Sc <- t(Z) %*% Ssmooth %*% Z       # 9 by 9
+  centering_error <- max(abs(colSums(Bc)))
+  stopifnot(centering_error < 1e-9)
+
+  # ------------------- STEP 6: FULL MODEL MATRIX ------------------------
+  # X = [intercept | B-versus-E indicator | centered Northing spline].
+  # Only the spline block is penalized. k=10 yields p=11 columns.
+  X <- cbind(1, P, Bc)
+  p <- ncol(X)
+  S <- matrix(0, nrow = p, ncol = p)
+  S[3:p, 3:p] <- Sc
+  XtX <- crossprod(X)
+  XtY <- crossprod(X, Y)
+  stopifnot(p == 11, qr(X)$rank == p)
+```
+
+## Step 6. Run the 400-point smoothing sweep for all 199 Eastings
+
+At each of 400 candidate $\lambda$ values, one matrix $K=X^TX+\lambda S$ is solved against **all 199 response vectors at once**. This is algebraically the same as refitting each Easting separately because $X$ and $S$ are shared, but faster. The code stores RSS, total/smooth EDF, GCV, unpenalized Product B coefficient, and fixed-basis LOOCV.
+
+**Expected:** `79,600 GCV evaluations` and smooth EDF decreasing toward 1. **Do not** interpret this as 79,600 separately chosen optimizers; all parameters are fixed from the grid.
+
+```{r stage2_step_6, echo=TRUE, warning=TRUE, message=TRUE}
+# Each K and each hat matrix H is common to all 199 response vectors.
+# This preserves the fixed-lambda formulas of the verified manual script.
+GCV_grid <- matrix(NA_real_, nrow = M, ncol = n_east)
+RSS_grid <- matrix(NA_real_, nrow = M, ncol = n_east)
+Product_grid <- matrix(NA_real_, nrow = M, ncol = n_east)
+LOO_grid <- matrix(NA_real_, nrow = M, ncol = n_east)
+EDF_grid <- numeric(M)
+
+for (j in 1:M) {
+  K <- XtX + lambda_grid[j] * S
+  Bj <- solve(K, XtY)                    # coefficients: 11 x 199
+  H <- X %*% solve(K, t(X))             # hat matrix: 24 x 24
+  R <- Y - X %*% Bj                      # residuals: 24 x 199
+  df_j <- sum(diag(H))
+  EDF_grid[j] <- df_j
+  RSS_grid[j, ] <- colSums(R^2)
+  Product_grid[j, ] <- Bj[2, ]
+  GCV_grid[j, ] <- n * RSS_grid[j, ] / (n - df_j)^2
+
+  # Exact leave-one-out expression with X, S and lambda kept fixed.
+  leverage_denom <- 1 - diag(H)
+  if (min(leverage_denom) > 1e-10) {
+    for (s in seq_along(eastings)) {
+      LOO_grid[j, s] <- mean((R[, s] / leverage_denom)^2)
+    }
+  }
+}
+stopifnot(all(is.finite(GCV_grid)), all(is.finite(Product_grid)))
+
+# In the same single-penalty model, EDF declines as lambda grows.
+stopifnot(max(diff(EDF_grid)) < 1e-5)
+# Training RSS cannot decrease as lambda increases; numerical slack 1e-5.
+for (s in seq_along(eastings)) {
+  stopifnot(min(diff(RSS_grid[, s])) > -1e-5)
+}
+cat("Completed", M, "common-hat-matrix calculations,",
+    n_east * M, "GCV evaluations.\n")
+cat("Smooth EDF range:", range(EDF_grid - 2), "\n")
+```
+
+## Step 7. Compute the exact linear limit and detect local minima
+
+The finite right edge ($\log\lambda=23$) is not infinity. We therefore fit the exact reduced linear model $[1,P,x-\bar x]$ separately, as in the original code. We detect local GCV minima from adjacent differences and refine their location with a three-point quadratic interpolation followed by an actual penalized refit.
+
+**Expected:** a summary row for every Easting, `NA` structural gap if no interior minimum is found, and a candidate table identifying `interior_refined`, `linear_limit`, `left_grid_edge`, and `right_grid_edge` separately. The counts and score gaps outside the original three slices are **unknown until run**.
+
+```{r stage2_step_7, echo=TRUE, warning=TRUE, message=TRUE}
+# EXACT linear limit: straight-line Northing adjustment remains unpenalized.
+# Unlike the right edge of the finite grid, this is lambda = infinity.
+Xlin <- cbind(1, P, x - mean(x))
+Blin <- qr.solve(Xlin, Y)
+Rlin <- Y - Xlin %*% Blin
+rss_lin <- colSums(Rlin^2)
+gcv_lin <- n * rss_lin / (n - ncol(Xlin))^2
+beta_lin <- as.numeric(Blin[2, ])
+
+# Candidate table: exact limit + finite edges + refined interior dips.
+all_candidates <- NULL
+field_summary <- NULL
+
+for (s in seq_along(eastings)) {
+  e <- eastings[s]
+  gcv <- GCV_grid[, s]
+  turns <- diff(sign(diff(gcv)))
+  h_log <- log_lambda[2] - log_lambda[1]
+  slice_candidates <- NULL
+  count_interior <- 0L
+
+  for (j in seq_along(turns)) {
+    if (turns[j] == 2 && (EDF_grid[j + 1] - 2) > flat_tol) {
+      y1 <- gcv[j]
+      y2 <- gcv[j + 1]
+      y3 <- gcv[j + 2]
+      curvature <- y1 - 2 * y2 + y3
+      log_star <- log_lambda[j + 1]
+      if (curvature > 0) {
+        log_star <- log_lambda[j + 1] + h_log * (y1 - y3) / (2 * curvature)
+      }
+      log_star <- min(max(log_star, log_lambda[j]), log_lambda[j + 2])
+      lam_star <- exp(log_star)
+      Kstar <- XtX + lam_star * S
+      bstar <- solve(Kstar, XtY[, s, drop = FALSE])
+      Hstar <- X %*% solve(Kstar, t(X))
+      rstar <- as.vector(Y[, s] - X %*% bstar)
+      edf_star <- sum(diag(Hstar))
+      gcv_star <- n * sum(rstar^2) / (n - edf_star)^2
+      count_interior <- count_interior + 1L
+      slice_candidates <- rbind(slice_candidates, data.frame(
+        Easting = e, Candidate = "interior_refined",
+        log_lambda = log_star, lambda = lam_star,
+        GCV = gcv_star, Smooth_EDF = edf_star - 2,
+        Product_B = bstar[2, 1]
+      ))
+    }
+  }
+
+  # Structural score gap is UNDEFINED if there is no detected interior dip.
+  best_interior_gcv <- NA_real_
+  if (count_interior > 0) {
+    best_interior_gcv <- min(slice_candidates$GCV)
+  }
+  delta_struct <- best_interior_gcv - gcv_lin[s]
+
+  slice_candidates <- rbind(slice_candidates, data.frame(
+    Easting = e, Candidate = "linear_limit",
+    log_lambda = Inf, lambda = Inf,
+    GCV = gcv_lin[s], Smooth_EDF = 1,
+    Product_B = beta_lin[s]
+  ))
+  for (j in c(1, M)) {
+    slice_candidates <- rbind(slice_candidates, data.frame(
+      Easting = e,
+      Candidate = if (j == 1) "left_grid_edge" else "right_grid_edge",
+      log_lambda = log_lambda[j], lambda = lambda_grid[j],
+      GCV = gcv[j], Smooth_EDF = EDF_grid[j] - 2,
+      Product_B = Product_grid[j, s]
+    ))
+  }
+
+  best_candidate <- slice_candidates[which.min(slice_candidates$GCV), , drop = FALSE]
+  jbest <- which.min(gcv)
+  all_candidates <- rbind(all_candidates, slice_candidates)
+  field_summary <- rbind(field_summary, data.frame(
+    Easting = e, n = n, Basis_Dimension = k,
+    Basis_Partition_Error = partition_error,
+    Penalty_Rank = penalty_rank,
+    Centering_Error = centering_error,
+    Interior_Dip_Count = count_interior,
+    Best_Interior_GCV = best_interior_gcv,
+    Structural_Gap_Interior_Minus_Linear = delta_struct,
+    GCV_Minimum_Grid = gcv[jbest],
+    LogLambda_Minimum_Grid = log_lambda[jbest],
+    Product_B_Grid = Product_grid[jbest, s],
+    GCV_Linear_Limit = gcv_lin[s],
+    Product_B_Linear_Limit = beta_lin[s],
+    Lowest_Candidate = best_candidate$Candidate,
+    Lowest_Candidate_GCV = best_candidate$GCV,
+    Lowest_Candidate_Product_B = best_candidate$Product_B,
+    stringsAsFactors = FALSE
+  ))
+}
+
+cat("Detected interior dips at", sum(field_summary$Interior_Dip_Count > 0),
+    "of", n_east, "Eastings.\n")
+cat("Linear limit is lowest LISTED candidate at",
+    sum(field_summary$Lowest_Candidate == "linear_limit"), "Eastings.\n")
+# These last two quantities are OUTPUTS, not expectations or publication claims.
+```
+
+## Step 8. Verify against the historical three-slice results
+
+This is the acceptance gate. We compare our full-field results **back to recorded three-slice manual outputs**, not to expectations invented for this analysis. A separate fixed-basis leave-one-out algebra check uses three omitted observations in each of the three original slices.
+
+**Expected:** all 214/216/218 benchmark rows should have `PASS = TRUE`; displayed benchmark differences should be small (the tolerances are $10^{-5}$ for GCV and $10^{-6}$ for the Product coefficient). An error means stop and investigate; do not accept full-field outputs as validated.
+
+```{r stage2_step_8, echo=TRUE, warning=TRUE, message=TRUE}
+# These numbers come from the previously saved GCV_slice_summary.csv and
+# GCV_candidate_minima.csv, not from fabricated examples.
+expected <- data.frame(
+  Easting = c(214, 216, 218),
+  GCV_Minimum_Grid = c(153.498488441639, 156.334528714505, 160.229588549968),
+  GCV_Linear_Limit = c(153.498324474234, 156.334334369990, 160.229367413985),
+  Product_B_Linear_Limit = c(11.7552782105169, 11.4665464044200, 11.1898747783199),
+  Interior_GCV = c(158.422292325372, 171.416644800416, NA_real_),
+  Interior_Dip_Count = c(1L, 1L, 0L)
+)
+
+benchmark <- data.frame()
+for (r in seq_len(nrow(expected))) {
+  e <- expected$Easting[r]
+  s <- match(e, field_summary$Easting)
+  current <- field_summary[s, , drop = FALSE]
+  d_grid <- abs(current$GCV_Minimum_Grid - expected$GCV_Minimum_Grid[r])
+  d_lim <- abs(current$GCV_Linear_Limit - expected$GCV_Linear_Limit[r])
+  d_beta <- abs(current$Product_B_Linear_Limit - expected$Product_B_Linear_Limit[r])
+  d_interior <- abs(current$Best_Interior_GCV - expected$Interior_GCV[r])
+  if (is.na(d_interior) && is.na(expected$Interior_GCV[r]) &&
+      current$Interior_Dip_Count == 0) d_interior <- 0
+  okay <- is.finite(d_grid) && is.finite(d_lim) && is.finite(d_beta) &&
+    is.finite(d_interior) && d_grid < 1e-5 && d_lim < 1e-5 &&
+    d_beta < 1e-6 && d_interior < 1e-5 &&
+    current$Interior_Dip_Count == expected$Interior_Dip_Count[r]
+  benchmark <- rbind(benchmark, data.frame(
+    Easting = e, Grid_GCV_Abs_Diff = d_grid,
+    Linear_GCV_Abs_Diff = d_lim,
+    Linear_Product_Abs_Diff = d_beta,
+    Interior_GCV_Abs_Diff = d_interior,
+    Detected_Interior_Dips = current$Interior_Dip_Count,
+    Reference_Interior_Dips = expected$Interior_Dip_Count[r],
+    PASS = okay
+  ))
+}
+cat("\nHISTORICAL THREE-SLICE BENCHMARK:\n")
+print(benchmark, row.names = FALSE, digits = 12)
+cat("Historical benchmark passed:", all(benchmark$PASS), "\n")
+
+# Repeat the original fixed-basis held-out identity for three old slices.
+# We retain only 3 omitted observations per slice, matching prior code.
+cv_check_j <- floor(M / 2)
+cv_check_lambda <- lambda_grid[cv_check_j]
+Kcv <- XtX + cv_check_lambda * S
+Hcv <- X %*% solve(Kcv, t(X))
+cv_identity <- data.frame(Easting = reference_eastings,
+                          Max_Squared_Error_Difference = NA_real_)
+for (r in seq_along(reference_eastings)) {
+  s <- match(reference_eastings[r], eastings)
+  yy <- Y[, s]
+  bcv <- solve(Kcv, crossprod(X, yy))
+  cv_resid <- as.vector(yy - X %*% bcv)
+  cv_error <- 0
+  for (i in c(1, floor(n / 2), n)) {
+    Xminus <- X[-i, , drop = FALSE]
+    yyminus <- yy[-i]
+    Kminus <- crossprod(Xminus) + cv_check_lambda * S
+    bminus <- solve(Kminus, crossprod(Xminus, yyminus))
+    pred <- sum(X[i, ] * bminus[, 1])
+    sq_direct <- (yy[i] - pred)^2
+    sq_hat <- (cv_resid[i] / (1 - Hcv[i, i]))^2
+    cv_error <- max(cv_error, abs(sq_direct - sq_hat))
+  }
+  cv_identity$Max_Squared_Error_Difference[r] <- cv_error
+}
+print(cv_identity, row.names = FALSE, digits = 12)
+cv_pass <- all(cv_identity$Max_Squared_Error_Difference < 1e-5)
+
+# A failed anchor check blocks export of ACCEPTED full-field results.
+if (!all(benchmark$PASS) || !cv_pass) {
+  write.csv(benchmark, file.path(out_dir, "FAILED_Stage2_Benchmark.csv"), row.names = FALSE)
+  write.csv(cv_identity, file.path(out_dir, "FAILED_Stage2_LOOCV_Check.csv"), row.names = FALSE)
+  stop("Stage 2 validation failed. Investigate before accepting full-field results.")
+}
+cat("STAGE 2 VALIDATION: PASS. Full-field output may be saved.\n")
+```
+
+## Step 9. Export the full-field tables and actual diagnostic figures
+
+Only after the benchmark passes, the script writes the complete grid, candidate minima, full-field summary, benchmark CSV, and a genuine data-based multi-page PDF. The GCV heatmap is centered on each Easting's exact linear-limit GCV, allowing comparison of criterion shape rather than misleading absolute cross-field color shifts.
+
+**Expected:** `Manual_Full_Field_Grid.csv` with 79,600 rows, one summary row for each of 199 Eastings, and the diagnostic PDF. **No preset field-wide results are claimed.**
+
+```{r stage2_step_9, echo=TRUE, warning=TRUE, message=TRUE}
+# Retain the original three-slice file names untouched.
+# Export 79,600 rows with the original manual GCV variables.
+all_grid <- data.frame()
+for (s in seq_along(eastings)) {
+  all_grid <- rbind(all_grid, data.frame(
+    Easting = eastings[s],
+    log_lambda = log_lambda, lambda = lambda_grid,
+    GCV = GCV_grid[, s], Smooth_EDF = EDF_grid - 2,
+    Total_EDF = EDF_grid, RSS = RSS_grid[, s],
+    Product_B = Product_grid[, s],
+    Fixed_Basis_LOOCV = LOO_grid[, s]
+  ))
+}
+stopifnot(nrow(all_grid) == M * n_east)
+
+write.csv(all_grid, file.path(out_dir, "Manual_Full_Field_Grid.csv"), row.names = FALSE)
+write.csv(all_candidates, file.path(out_dir, "Manual_Candidate_Minima.csv"), row.names = FALSE)
+write.csv(field_summary, file.path(out_dir, "Manual_Full_Field_Summary.csv"), row.names = FALSE)
+write.csv(benchmark, file.path(out_dir, "Stage2_Benchmark_Validation.csv"), row.names = FALSE)
+write.csv(cv_identity, file.path(out_dir, "Stage2_Fixed_Basis_LOOCV_Check.csv"), row.names = FALSE)
+
+# All plotted values below come from actual full-field computations.
+# Plot 1: GCV - exact linear-limit GCV (not an invented normalized surface).
+gcv_minus_linear <- GCV_grid
+for (s in seq_along(eastings)) {
+  gcv_minus_linear[, s] <- GCV_grid[, s] - gcv_lin[s]
+}
+
+pdf(file.path(out_dir, "Manual_Full_Field_Diagnostics.pdf"),
+    width = 11, height = 8.5, onefile = TRUE)
+par(mar = c(5, 5, 3, 2))
+image(x = log_lambda, y = eastings, z = gcv_minus_linear,
+      col = grDevices::hcl.colors(60, palette = "RdBu", rev = TRUE),
+      xlab = "log(lambda)", ylab = "Easting",
+      main = "Manual GCV minus exact linear-limit GCV")
+abline(h = c(214, 216, 218), col = "black", lty = 3)
+
+# Plot 2: Product B coefficient: lowest listed candidate vs linear limit.
+plot(eastings, field_summary$Lowest_Candidate_Product_B, type = "l",
+     lwd = 2, col = "firebrick",
+     xlab = "Easting", ylab = "Estimated Product B coefficient",
+     main = "Manual coefficient trajectories across field")
+lines(eastings, field_summary$Product_B_Linear_Limit,
+      col = "steelblue", lwd = 2, lty = 2)
+legend("topright", legend = c("Lowest listed GCV candidate", "Exact linear limit"),
+       col = c("firebrick", "steelblue"), lwd = 2, lty = c(1, 2), bty = "n")
+
+# Plot 3: score difference is NA if no interior minimum was detected.
+plot(eastings, field_summary$Structural_Gap_Interior_Minus_Linear,
+     type = "p", pch = 16, cex = 0.55,
+     xlab = "Easting", ylab = "Best interior GCV - linear-limit GCV",
+     main = "Manual structural score-gap diagnostic")
+abline(h = 0, col = "gray40", lty = 2)
+
+# Plot 4: number of grid-detected interior dips at each Easting.
+plot(eastings, field_summary$Interior_Dip_Count,
+     type = "h", lwd = 1.5,
+     xlab = "Easting", ylab = "Detected interior dips",
+     main = "Manual GCV local-minimum detector")
+
+# Plot 5: the original manual 3 x 3 panels replicated from full-field output.
+par(mfrow = c(3, 3), mar = c(4, 4, 2.5, 1))
+for (metric in c("GCV", "Smooth_EDF", "Product_B")) {
+  for (e in reference_eastings) {
+    s <- match(e, eastings)
+    vals <- if (metric == "GCV") GCV_grid[, s] else
+      if (metric == "Smooth_EDF") EDF_grid - 2 else Product_grid[, s]
+    plot(log_lambda, vals, type = "l", lwd = 2,
+         xlab = "log(lambda)", ylab = metric,
+         main = paste("Easting", e))
+    if (metric == "GCV") abline(h = gcv_lin[s], lty = 3, col = "steelblue")
+    if (metric == "Smooth_EDF") abline(h = 1, lty = 3, col = "steelblue")
+    if (metric == "Product_B") abline(h = beta_lin[s], lty = 3, col = "steelblue")
+  }
+}
+dev.off()
+
+cat("\nSAVED STAGE 2 OUTPUTS TO:\n", out_dir, "\n", sep = "")
+cat("Total grid rows:", nrow(all_grid), "\n")
+cat("All three historical benchmarks:", all(benchmark$PASS), "\n")
+cat("Fixed-basis LOOCV identity:", cv_pass, "\n")
+cat("STAGE 2 FINAL STATUS: PASS\n")
+```
+
+# How Stage 2 fits the research roadmap
+
+- **Stages 1A/1B — completed.** Field structure and three-slice source reconciliation.
+- **Stage 2 — execute and inspect next.** Independent manual GCV across all 199 Eastings, anchored to previously verified 214/216/218 results.
+- **Stage 3 — not yet executed.** The original `mgcv` B-spline specification, automatic selection vs. a separate broad fixed-`sp` grid across Eastings. Must not compare unaligned numerical lambda scales.
+- **Stage 4 — not yet executed.** Classify GCV stationary candidates, compare finite-grid/interior and exact-linear scores, and inspect score-gap behavior.
+- **Stage 5 — not yet executed.** Compute Reiss–Ogden $h_1,h_2,h_3$ under a verified reparameterization; cross-check $h_2=h_3$ against GCV stationary points.
+- **Stage 6 — not yet executed.** Link selection diagnostics to the Product B coefficient trajectory, with appropriate attention to neighboring-slice dependence.
+- **Stages 7–8 — future research.** Controlled simulations and inferential/modeling questions; claims of statistical significance or novel theory require additional validation.
+
+# How to read your Stage 2 results
+
+When you upload the Stage 2 outputs, we will audit the three reference benchmarks first, then interpret the 199-slice candidate counts, the score-gap plot, and the estimated Product B trajectories. We will treat a missing interior dip as `NA`, not zero, and we will not infer smoothness or continuous branch crossings between observed Eastings from line segments alone.
+
+**Data-provenance qualification:** The full CSV matches the previously studied slice observations, but this analysis does not establish whether Yield was raw or smoothed during upstream preprocessing.

@@ -1,0 +1,636 @@
+# Full Research Recap: Stages 1A Through 3C
+
+GCV Full-Field Project | Directory and Results Guide | October 26, 2026
+
+Your screenshots show the complete output directory from our research through Stage 3C. Each folder represents a distinct statistical experiment, and each file serves a particular purpose.
+
+We have progressed from validating the harvest data, to constructing the GCV criterion manually, to evaluating whether automatic smoothing selection finds the lowest available GCV score, and finally to investigating how smoothing selection affects the estimated Product B coefficient.
+
+## 1. The overall structure
+
+01_Data_Audit — What data do we have?
+
+Validate the full harvest experiment and its fixed spatial design.
+
+01B_Three_Slice_Reconciliation — Are these our original observations?
+
+Match Eastings 214, 216, and 218 to the earlier research inputs.
+
+02_Manual_Full_Field — What does the GCV criterion look like?
+
+Construct a cubic B-spline and its penalty in Base R; examine GCV over smoothing parameters across the field.
+
+03A_MGCV_Pilot — Does automatic selection find the best available candidate?
+
+Compare automatic `mgcv` fits against fixed smoothing-parameter grids at selected locations.
+
+03B_MGCV_Automatic_Full_Field — Where might automatic selection fail?
+
+Fit automatic GAMs at all Eastings and compare them against the exact linear-limit alternative.
+
+03C_MGCV_Fixed_Grid_Full_Field — How widespread is the problem?
+
+Evaluate the full GCV grid at every Easting, identify inferior automatic selections, and quantify coefficient sensitivity.
+
+End of Stage 3 — Completed
+
+Stage 4A, numerical refinement of candidate minima, is prepared but has not yet been executed.
+
+## 2. What model are we investigating?
+
+At each Easting \\(e\\), our pointwise GAM is
+
+\\[ \boxed{ Y_i(e)=\beta_0(e)+\beta_B(e)I(P_i=B)+f_e(N_i)+\varepsilon_i(e) } \\]
+
+where \\(N_i\\) is Northing, \\(I(P_i=B)\\) identifies Product B, and \\(f_e\\) is a penalized spline.
+
+The objective is to estimate the adjusted treatment coefficient \\(\beta_B(e)\\), while allowing the Northing adjustment to be flexible.
+
+We choose the amount of smoothness using generalized cross-validation:
+
+\\[ \boxed{ GCV_e(\lambda)= \frac{24\\,RSS_e(\lambda)} {[24-\operatorname{EDF}\_e(\lambda)]^2} } \\]
+
+Here, \\(RSS\\) measures residual variation, while EDF measures model complexity.
+
+- Smaller \\(\lambda\\): less penalization, typically greater spline flexibility.
+- Larger \\(\lambda\\): greater penalization, less curvature.
+- As \\(\lambda\to\infty\\): the Northing smooth approaches a linear function.
+
+The essential question is whether automatic `mgcv` optimization chooses a smoothing parameter with a GCV score as low as the best alternatives we can evaluate.
+
+# Stage 1A — `01_Data_Audit`
+
+## 3. Purpose: Understand the experiment before fitting models
+
+Completed — Data audit passed
+
+This stage established the layout of the complete agricultural strip trial.
+
+| Property                                              | Result          |
+| ----------------------------------------------------- | --------------- |
+| Total records                                         | 4,776           |
+| Distinct Eastings                                     | 199             |
+| Easting locations                                     | 2, 4, 6, …, 398 |
+| Harvest passes per Easting                            | 24              |
+| Product B observations                                | 12 per Easting  |
+| Product E observations                                | 12 per Easting  |
+| Fixed Product, Northing, and Pair assignments by pass | Yes             |
+
+The important discovery was that the design does not change as we move across Easting.
+
+At each location, we observe a different response vector:
+
+\\[ \mathbf y_e= \begin{bmatrix} Y_1(e)\\\Y_2(e)\\\\\vdots\\\Y\_{24}(e) \end{bmatrix}. \\]
+
+But the Product and Northing measurements stay in the same positions.
+
+This makes the subsequent GCV landscape much easier to compare across the field.
+
+### What each file in `01_Data_Audit` does
+
+| File                                | Contents and purpose                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Easting_Audit.csv`                 | One row for each Easting. Contains the number of observations, numbers of Product B and E records, unique pass counts, and a validity indicator. |
+| `Pass_Design_Audit.csv`             | One row per harvest pass. Checks whether Northing, Product, and Pair remain constant across Eastings.                                            |
+| `GCV_Stage1B_Annotated_Package.zip` | The annotated materials used for the next stage. It is a code/documentation package, not an analytical result.                                   |
+
+What to read first: `Easting_Audit.csv` describes the cross-sectional data structure; `Pass_Design_Audit.csv` establishes why a common model design can be used across Eastings.
+
+# Stage 1B — `01B_Three_Slice_Reconciliation`
+
+## 4. Purpose: Connect the complete data to our original research
+
+Completed — All 72 observations matched
+
+Originally, our research used three separately exported datasets:
+
+\\[ e=214,\quad216,\quad218. \\]
+
+We needed to establish that they came from the same full dataset and that their Yield measurements were unchanged.
+
+The reconciliation matched observations using Easting and `PassNo`, then compared all relevant variables.
+
+### Results
+
+| Easting | Rows compared | Maximum Yield discrepancy |
+| ------- | ------------- | ------------------------- |
+| 214     | 24            | \\(3.01\times10^{-12}\\)  |
+| 216     | 24            | \\(4.01\times10^{-12}\\)  |
+| 218     | 24            | 0                         |
+
+These tiny discrepancies reflect floating-point representation, not substantively different observations.
+
+### What each file in `01B_Three_Slice_Reconciliation` does
+
+| File                                   | Contents and purpose                                                                                                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stage1B_Row_Level_Reconciliation.csv` | Detailed comparison of all 72 observations. Includes full-dataset and slice Yield values, their absolute differences, Northing comparisons, Product/Pair/Pass matches, and `All_Match`. |
+| `Stage1B_Summary.csv`                  | Three-row summary showing the largest and average discrepancies at each Easting, failed-row counts, and pass/fail results.                                                              |
+| `Stage1B_Failed_Rows.csv`              | Contains only observations that failed a comparison. For this run, there were zero failed rows.                                                                                         |
+| `Stage1B_Provenance.txt`               | Documents the input files, comparison criteria, and reconciliation settings.                                                                                                            |
+
+What to read first: `Stage1B_Summary.csv` tells you whether reconciliation succeeded; `Stage1B_Row_Level_Reconciliation.csv` provides the observation-level evidence.
+
+### Why Stages 1A and 1B matter
+
+They do not establish a new statistical effect. Instead, they establish the dataset and experimental structure on which every later result depends.
+
+At this point, we knew the original three-slice analysis could be extended to the full field without substituting a different Yield dataset.
+
+# Stage 2 — `02_Manual_Full_Field`
+
+## 5. Purpose: Construct and study GCV without relying on `mgcv`
+
+Completed — 79,600 manual GCV evaluations
+
+Stage 2 is our mathematical reconstruction of penalized spline regression.
+
+Rather than use `mgcv::gam()`, we explicitly constructed the cubic B-spline basis, calculated its second-derivative penalty, and solved the penalized least-squares equations.
+
+The model matrix was
+
+\\[ X=[\mathbf1,\ P,\ B_c], \\]
+
+with the smoothing penalty \\(S\\). For each smoothing parameter,
+
+\\[ \widehat{\boldsymbol\theta}\_\lambda = (X^\top X+\lambda S)^{-1}X^\top\mathbf y. \\]
+
+The corresponding hat matrix was
+
+\\[ H\_\lambda= X(X^\top X+\lambda S)^{-1}X^\top. \\]
+
+We used 400 log-\\(\lambda\\) values:
+
+\\[ \log\lambda\in[-1,23]. \\]
+
+Across 199 Eastings, this produced 79,600 model evaluations.
+
+## 6. What we learned from Stage 2
+
+At least one interior minimum
+
+# 189
+
+Multiple interior minima
+
+# 27
+
+Linear-limit preferred candidates
+
+# 18
+
+The important conclusion is that the GCV criterion is frequently non-monotone and can contain competing interior minima.
+
+The detector used decreasing-to-increasing changes in GCV along the grid. The detected candidates were then locally refined.
+
+We also calculated the exact linear-limit candidate
+
+\\[ GCV\_{e,\infty} = \frac{24RSS\_{e,\infty}}{(24-3)^2} \\]
+
+to compare against the interior minima.
+
+## 7. What each file in `02_Manual_Full_Field` does
+
+| File                                 | Contents and purpose                                                                                                                                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Manual_Full_Field_Grid.csv`         | The complete 79,600-row result. Contains the smoothing-parameter grid, GCV, EDF, RSS, Product B coefficient, and related fixed-basis diagnostics for each Easting.                       |
+| `Manual_Candidate_Minima.csv`        | The candidate-minimum table. Records detected interior minima and their locations, GCV scores, EDF values, and Product B coefficients, together with the other reported candidate types. |
+| `Manual_Full_Field_Summary.csv`      | One row per Easting. Summarizes detected minima, the linear-limit score and coefficient, the lowest evaluated candidate, and the resulting model-selection findings.                     |
+| `Manual_Full_Field_Diagnostics.pdf`  | The main visual report: full-field GCV heatmap, Product coefficient trajectories, structural score gaps, interior-minimum counts, and detailed plots for Eastings 214, 216, and 218.     |
+| `Stage2_Benchmark_Validation.csv`    | Compares the new manual calculations with the original three-Easting numerical results.                                                                                                  |
+| `Stage2_Fixed_Basis_LOOCV_Check.csv` | Confirms the leave-one-out prediction identity for the fixed spline basis and selected smoothing parameters. This is a numerical consistency check, not a treatment-effect result.       |
+
+## 8. Which Stage 2 outputs matter for our scientific findings?
+
+The most important three are:
+
+`Manual_Full_Field_Grid.csv` gives the actual GCV curves. Each Easting has 400 rows representing different log-\\(\lambda\\) values. If you want to reconstruct a GCV plot, this is the source.
+
+`Manual_Candidate_Minima.csv` answers: Where are the local minima, and what are their criterion scores?
+
+`Manual_Full_Field_Summary.csv` answers: Which candidate has the lowest evaluated GCV at each Easting, and what Product B coefficient does it produce?
+
+The PDF presents these relationships graphically.
+
+### Stage 2's limitation
+
+It does not tell us whether `mgcv` automatically finds the lowest GCV.
+
+The manual spline is also not parameterized identically to the package implementation. Its knot placement and penalty scaling are different.
+
+So Stage 2 establishes the mathematical GCV landscape under the manually constructed model. Stage 3 separately examines the actual automatic GAM procedure.
+
+# Stage 3A — `03A_MGCV_Pilot`
+
+## 9. Purpose: Determine whether automatic `mgcv` selection finds the lowest available GCV
+
+Completed — Six pilot Eastings
+
+Stage 3A was our first direct test of the automatic GCV optimizer.
+
+We used the original model specification:
+
+```
+mgcv::gam(
+  Yield ~ Product +
+    s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+  data = d,
+  family = gaussian(),
+  method = "GCV.Cp"
+)
+```
+
+At each Easting, we ran two approaches:
+
+- Automatic: Let `mgcv` choose its smoothing parameter.
+- Fixed grid: Explicitly supply 600 different smoothing parameters and compare the GCV scores.
+
+We selected Eastings 212, 214, 216, 218, 232, and 234 because they include our original research sites and two regions where the preferred smoothing regime changes.
+
+## 10. What did Stage 3A show?
+
+| Easting | Automatic GCV | Lowest-grid GCV | Difference |
+| ------- | ------------- | --------------- | ---------- |
+| 212     | 145.6643      | 145.6662        | −0.0019    |
+| 214     | 158.4734      | 153.4983        | +4.9750    |
+| 216     | 171.4501      | 156.3343        | +15.1157   |
+| 218     | 160.2294      | 160.2294        | ≈ 0        |
+| 232     | 223.9368      | 223.9368        | ≈ 0        |
+| 234     | 228.6095      | 228.6095        | ≈ 0        |
+
+The central result was that automatic selection at Eastings 214 and 216 returned higher GCV scores than the best evaluated grid alternatives.
+
+This established that convergence of the automatic optimization routine does not guarantee that it finds the lowest available criterion score.
+
+## 11. What each file in `03A_MGCV_Pilot` does
+
+| File                                | Contents and purpose                                                                                                                                                                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stage3A_Automatic_Selections.csv`  | One row per pilot Easting. Records the automatically selected \\(\lambda\\), log-\\(\lambda\\), GCV, smooth EDF, Product B coefficient, convergence, and fixed-parameter refit agreement.                                    |
+| `Stage3A_Fixed_Grid.csv`            | All 3,600 fixed-parameter fits. For each Easting and smoothing parameter, reports GCV, smooth EDF, and Product B. This supplies the actual GCV curves.                                                                       |
+| `Stage3A_Auto_vs_Grid.csv`          | The central research comparison: automatic versus lowest-grid GCV, selected smoothing parameters, coefficient differences, number of detected interior minima, and whether the lowest grid value lies at the right boundary. |
+| `Stage3A_Model_Comparison.csv`      | Combines the `mgcv` findings with the Stage 2 manual summary to compare scientific results while keeping the model parameterizations distinct.                                                                               |
+| `Stage3A_GCV_Pilot_Diagnostics.pdf` | Six GCV profiles, a plot of optimizer score gaps, and a plot of Product B coefficient differences.                                                                                                                           |
+| `Stage3A_Historical_Benchmark.csv`  | Compares the pilot results against the original 214/216/218 research calculations.                                                                                                                                           |
+| `Stage3A_Provenance.txt`            | Records the R and `mgcv` versions, model specification, grid, dataset, and other run settings.                                                                                                                               |
+
+### How to interpret the main output
+
+Open `Stage3A_Auto_vs_Grid.csv`.
+
+The important variables are:
+
+\\[ D\_{\mathrm{opt}}(e)= GCV\_{\mathrm{auto}}(e)-GCV\_{\mathrm{grid}}(e) \\]
+
+and
+
+\\[ \Delta\_\beta(e)= \widehat\beta\_{B,\mathrm{auto}}(e) - \widehat\beta\_{B,\mathrm{grid}}(e). \\]
+
+If \\(D\_{\mathrm{opt}}>0\\), a better-scoring grid candidate exists.
+
+If \\(\Delta\_\beta\ne0\\), the different smoothing choices produce different estimated treatment coefficients.
+
+These are separate findings. A substantial GCV gap does not necessarily imply a substantial coefficient difference.
+
+# Stage 3B — `03B_MGCV_Automatic_Full_Field`
+
+## 12. Purpose: Extend automatic GAM selection to all 199 Eastings
+
+Completed — 199 automatic GAM fits
+
+Stage 3A showed that automatic selection can return inferior evaluated solutions.
+
+The next question was where else this might happen across the full field.
+
+Stage 3B fitted the GAM automatically at all 199 Eastings, but did not yet evaluate the full 600-point grid at every location.
+
+Instead, we compared each automatic fit with an exact, independently calculated linear-limit alternative.
+
+The reason is computational and mathematical: we already know how to calculate that limiting model through ordinary least squares.
+
+The limiting design is
+
+\\[ X\_\infty= \begin{bmatrix} \mathbf1&P&N-\bar N \end{bmatrix}. \\]
+
+Its total EDF is 3.
+
+We defined
+
+\\[ \boxed{ D\_{\mathrm{linear}}(e)= GCV\_{\mathrm{auto}}(e)-GCV\_{\mathrm{linear}}(e). } \\]
+
+If this quantity is positive beyond the numerical tolerance, the automatic model has a worse GCV score than the straight-line alternative.
+
+## 13. Stage 3B findings
+
+Automatic fits
+
+# 199
+
+Worse than exact linear limit
+
+# 6
+
+Nearly linear automatic fits
+
+# 11
+
+The six Eastings where automatic GCV exceeded the linear-limit score were:
+
+| Easting | Automatic GCV minus linear-limit GCV |
+| ------- | ------------------------------------ |
+| 28      | +4.049                               |
+| 30      | +0.135                               |
+| 172     | +1.868                               |
+| 174     | +2.439                               |
+| 214     | +4.975                               |
+| 216     | +15.116                              |
+
+These are useful locations to investigate for possible numerical optimizer trapping.
+
+But the screening method has an important limitation: if automatic GCV beats the linear limit, it might still be worse than another interior minimum.
+
+That is why Stage 3C was necessary.
+
+## 14. What each file in `03B_MGCV_Automatic_Full_Field` does
+
+| File                                           | Contents and purpose                                                                                                                                                                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Stage3B_Automatic_Selections.csv`             | The principal automatic-fitting dataset. One row for each Easting, containing selected smoothing parameter, log smoothing parameter, GCV, EDF, RSS, Product B, convergence status, and selected-parameter refit differences. |
+| `Stage3B_Linear_Limit_Check.csv`               | Exact linear-limit OLS results at every Easting, including linear-limit GCV, Product B, RSS, and comparison against Stage 2's limiting values.                                                                               |
+| `Stage3B_Linear_Screen_and_Trajectories.csv`   | The main Stage 3B research file. Combines automatic and linear estimates, criterion differences, coefficient differences, near-linear indicators, adjacent changes, and manual Stage 2 comparisons.                          |
+| `Stage3B_Automatic_Full_Field_Diagnostics.pdf` | Four-page visual summary: automatic versus linear coefficient trajectories, smoothing-parameter and EDF trajectories, GCV differences, and adjacent coefficient changes.                                                     |
+| `Stage3B_Pilot_Benchmark.csv`                  | Compares six selected Stage 3B automatic fits with the earlier Stage 3A pilot results.                                                                                                                                       |
+| `Stage3B_Validation_Gate.csv`                  | Records whether the required Stage 3B acceptance checks passed.                                                                                                                                                              |
+| `Stage3B_Fit_Errors.csv`                       | Records any GAM-fitting or selected-parameter-refit failures. No failures occurred in the completed run.                                                                                                                     |
+| `Stage3B_IN_PROGRESS.csv`                      | Intermediate progress save of completed automatic fits. Useful for recovery if the run is interrupted. It is not the preferred final research dataset.                                                                       |
+| `Stage3B_Provenance.txt`                       | Documents model specification, versions, data source, run settings, and interpretation limitations.                                                                                                                          |
+
+### Which file is most useful?
+
+Open `Stage3B_Linear_Screen_and_Trajectories.csv`.
+
+It includes the important diagnostic variables:
+
+| Variable                    | Meaning                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `Auto_Minus_Linear_GCV`     | Whether automatic selection scores better or worse than the exact linear limit |
+| `Auto_Minus_Linear_Beta`    | How much the Product B estimate changes relative to the limiting model         |
+| `Worse_Than_Linear`         | Whether the GCV difference exceeds our numerical tolerance                     |
+| `Near_Linear_Auto`          | Whether the automatically fitted smooth is effectively linear                  |
+| `Adjacent_Auto_Beta_Change` | Change in the Product B estimate from the preceding Easting                    |
+| `Adjacent_LogSP_Change`     | Change in selected log smoothing parameter between adjacent Eastings           |
+| `Auto_Near_Linear_Switch`   | Indicator of a transition into or out of the nearly linear regime              |
+
+This is the first file in which we investigated the spatial behavior of automatic smoothing selection over the complete field.
+
+# Stage 3C — `03C_MGCV_Fixed_Grid_Full_Field`
+
+## 15. Purpose: Examine the entire evaluated GCV landscape under the original GAM specification
+
+Completed — 119,400 fixed-parameter GAM fits
+
+This is the culmination of our Stage 3 work.
+
+Stage 3B compared automatic selection against only the exact linear-limit candidate.
+
+Stage 3C expanded that comparison by evaluating the GCV criterion over 600 fixed smoothing parameters at every Easting.
+
+\\[ \ell_j=-12+\frac{37(j-1)}{599}, \qquad j=1,\ldots,600, \\]
+
+where
+
+\\[ \lambda_j=e^{\ell_j}. \\]
+
+We calculated:
+
+\\[ GCV_e(\lambda_j), \quad \operatorname{EDF}\_e(\lambda_j), \quad \widehat\beta_B(e;\lambda_j) \\]
+
+for every combination of Easting and grid location.
+
+The total was
+
+\\[ \boxed{199\times600=119,400} \\]
+
+fixed-parameter GAM evaluations.
+
+This provides a numerical representation of the function
+
+\\[ G(e,\ell)=GCV_e(e^\ell) \\]
+
+over the observed Eastings and evaluated log smoothing parameters.
+
+## 16. Stage 3C findings
+
+Inferior automatic selections
+
+# 16
+
+Eastings with multiple interior minima
+
+# 28
+
+Observed regime-preference transitions
+
+# 6
+
+The 16 Eastings where automatic GCV exceeded a fixed-grid score by more than \\(10^{-4}\\) were:
+
+2, 28, 30, 48, 50, 52, 80, 172, 174, 214, 216, 372, 374, 376, 378, and 380.
+
+This means the six locations found in Stage 3B were not the complete set of detected inferior automatic selections.
+
+Ten additional Eastings had lower-scoring finite-grid alternatives that the linear-limit screen alone did not reveal.
+
+## 17. What each file in `03C_MGCV_Fixed_Grid_Full_Field` does
+
+| File                                 | Contents and purpose                                                                                                                                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Stage3C_Full_Grid.csv`              | The most complete numerical dataset from Stage 3: 119,400 rows containing Easting, log smoothing parameter, smoothing parameter, GCV, EDF, Product B, and RSS.                                                     |
+| `Stage3C_Auto_vs_Grid.csv`           | The central 199-row research summary. Compares automatic selection, best evaluated grid candidate, exact linear limit, detected minima, and coefficient differences.                                               |
+| `Stage3C_Interior_Grid_Dips.csv`     | One row per qualifying detected interior minimum. Contains its Easting, grid index, log-\\(\lambda\\), GCV, smooth EDF, and Product B coefficient.                                                                 |
+| `Stage3C_Full_Field_Diagnostics.pdf` | Six-page visual report containing the full-field heatmap, treatment-coefficient trajectories, optimizer gaps, smoothing-parameter comparisons, coefficient sensitivity, minimum counts, and selected GCV profiles. |
+| `Stage3C_Pilot_Grid_Benchmark.csv`   | Compares the complete-grid results at six Eastings against the independent Stage 3A pilot.                                                                                                                         |
+| `Stage3C_Validation_Gate.csv`        | Eight checks establishing whether the completed Stage 3C outputs meet the acceptance criteria.                                                                                                                     |
+| `Stage3C_Fit_Errors.csv`             | Fit-error log. No errors occurred in the accepted run.                                                                                                                                                             |
+| `Stage3C_Checkpoint_Manifest.csv`    | Records input-file fingerprints, model settings, software versions, and grid settings. Prevents accidental mixing of checkpoints produced under different conditions.                                              |
+| `Stage3C_Provenance.txt`             | Documents the completed run, model specification, grid settings, and limitations.                                                                                                                                  |
+| `checkpoints/`                       | Contains a separate saved 600-point profile for each Easting, such as `E214.csv`. Allows the analysis to resume without recalculating every completed profile.                                                     |
+
+### Understanding the three most important CSV files
+
+A. `Stage3C_Full_Grid.csv` — The complete criterion landscape
+
+This answers:
+
+What happens to GCV, model complexity, and Product B as we vary the smoothing parameter at each Easting?
+
+Every Easting contributes 600 rows.
+
+We can use it to reproduce GCV curves, inspect candidate valleys, or develop new numerical diagnostics.
+
+B. `Stage3C_Interior_Grid_Dips.csv` — Candidate stationary locations
+
+This answers:
+
+Where does the evaluated GCV curve change from decreasing to increasing?
+
+The file contains 218 grid-detected interior-minimum records distributed across the field.
+
+These are numerical candidates, not yet independently verified roots of Reiss–Ogden's stationary-point equation.
+
+C. `Stage3C_Auto_vs_Grid.csv` — Our principal research findings
+
+This answers:
+
+Did automatic selection find an inferior GCV candidate, and how much did its choice change the estimated Product B coefficient?
+
+It contains our primary inferential motivation and numerical diagnostic comparisons.
+
+## 18. Important variables inside `Stage3C_Auto_vs_Grid.csv`
+
+| Variable                               | Interpretation                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `Automatic_GCV`                        | GCV score of the automatic GAM                                                               |
+| `Best_Grid_GCV`                        | Smallest GCV score among 600 fixed-grid values                                               |
+| `Exact_Linear_GCV`                     | GCV score of the exact linear-limit OLS model                                                |
+| `Automatic_LogLambda`                  | Smoothing parameter selected automatically, on the log scale                                 |
+| `Best_Grid_LogLambda`                  | Log smoothing parameter at the lowest grid score                                             |
+| `Automatic_Smooth_EDF`                 | Smooth complexity of the automatic model                                                     |
+| `Best_Grid_Smooth_EDF`                 | Smooth complexity of the lowest-grid model                                                   |
+| `Interior_Grid_Dip_Count`              | Number of qualifying detected interior minima                                                |
+| `Structural_Gap_Interior_Minus_Linear` | Difference between the best detected interior-minimum GCV and exact linear-limit GCV         |
+| `Auto_Minus_Best_Grid_GCV`             | Measures inferior automatic selection relative to the grid                                   |
+| `Auto_Minus_Best_Evaluated_GCV`        | Compares automatic GCV against the lowest score among automatic, grid, and linear candidates |
+| `Auto_Minus_Best_Grid_Beta`            | Difference between automatic and lowest-grid Product B coefficients                          |
+| `Auto_Worse_Than_Grid`                 | Indicator that the automatic GCV exceeds the best-grid score beyond tolerance                |
+| `Auto_Worse_Than_Linear`               | Indicator that automatic GCV exceeds the exact linear-limit score beyond tolerance           |
+| `Grid_Minimum_At_Right_Edge`           | Indicates whether the lowest grid score occurs at the largest evaluated smoothing parameter  |
+
+The three central research quantities are
+
+\\[ \boxed{ D\_{\mathrm{opt}}(e)= GCV\_{\mathrm{auto}}(e)-GCV\_{\mathrm{best\ grid}}(e) } \\]
+
+\\[ \boxed{ \Delta\_{\mathrm{struct}}(e)= GCV\_{\mathrm{best\ interior}}(e)-GCV\_{\mathrm{linear}}(e) } \\]
+
+and
+
+\\[ \boxed{ \Delta\_\beta(e)= \widehat\beta\_{B,\mathrm{auto}}(e) - \widehat\beta\_{B,\mathrm{best\ grid}}(e). } \\]
+
+These represent three different aspects of the same problem: optimizer performance, preferred smoothing regime, and scientific coefficient sensitivity.
+
+# 19. Why the six-page Stage 3C PDF is important
+
+The file `Stage3C_Full_Field_Diagnostics.pdf` provides a visual synthesis of the research.
+
+| Page | Figure                                                       | What it tells us                                                                                   |
+| ---- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| 1    | Full-field GCV heatmap                                       | How the GCV criterion changes with Easting and log smoothing parameter                             |
+| 2    | Automatic, lowest-grid, and linear Product B trajectories    | Where different smoothing-selection procedures produce different treatment coefficients            |
+| 3    | Automatic-minus-best-grid GCV gaps                           | Where and how strongly automatic selection scores worse than evaluated alternatives                |
+| 4    | Selected smoothing parameters and EDF trajectories           | Whether automatic and grid-selected fits belong to different smoothing regimes                     |
+| 5    | Product B coefficient differences and counts of local minima | Whether optimizer discrepancies affect the scientific coefficient, and where multiple minima occur |
+| 6    | Detailed GCV profiles at selected Eastings                   | Shows the actual shapes of competing GCV valleys and the automatic choices                         |
+
+For our eventual methodology paper, pages 2–5 are especially important because they connect optimizer behavior, criterion geometry, and coefficient sensitivity.
+
+# 20. What are our main findings across Stages 2 and 3?
+
+## A. Multiple minima occur throughout the field
+
+| Result                                               | Manual Stage 2 | Package-based Stage 3C |
+| ---------------------------------------------------- | -------------- | ---------------------- |
+| Eastings analyzed                                    | 199            | 199                    |
+| Grid points per Easting                              | 400            | 600                    |
+| Total GCV evaluations                                | 79,600         | 119,400                |
+| Eastings with at least one detected interior minimum | 189            | 189                    |
+| Eastings with multiple detected interior minima      | 27             | 28                     |
+
+The exact counts are slightly different because the manual and `mgcv` implementations use different spline basis and penalty parameterizations.
+
+Both analyses nevertheless show multiple GCV minima at numerous Eastings.
+
+## B. Some automatic selections are inferior to evaluated alternatives
+
+Stage 3C identified 16 Eastings where automatic GCV was higher than at least one tested grid candidate.
+
+Of these, six were already detectable using the linear-limit screen in Stage 3B.
+
+The other ten required evaluating alternative finite smoothing parameters.
+
+## C. The consequences for Product B are not proportional to GCV improvement
+
+Two particularly useful cases are:
+
+| Easting | GCV optimizer gap | Automatic minus best-grid Product B |
+| ------- | ----------------- | ----------------------------------- |
+| 174     | +2.439            | −1.237                              |
+| 374     | +10.761           | −0.014                              |
+
+Easting 174 has a smaller GCV discrepancy but much larger coefficient sensitivity.
+
+This suggests that understanding the GCV criterion alone will not be sufficient. We also need to understand how \\(\widehat\beta_B\\) responds to changes in \\(\lambda\\).
+
+## D. Changes in preferred smoothing regime do not always mean optimizer failure
+
+Near Eastings 232–234, the automatically selected smoothing regime changes from nearly linear to more flexible.
+
+The fixed-grid results show essentially the same preference change.
+
+Thus a substantial change in the Product B coefficient can occur even when automatic selection agrees with the lowest evaluated candidate.
+
+This distinction is crucial for our research.
+
+# 21. Which files should we use going forward?
+
+The experiment generated many files, but not all are equally important for interpreting or extending the research.
+
+| Research purpose                                    | Primary file                                                   |
+| --------------------------------------------------- | -------------------------------------------------------------- |
+| Describe experimental design                        | `Easting_Audit.csv`, `Pass_Design_Audit.csv`                   |
+| Establish correspondence with historical analysis   | `Stage1B_Summary.csv`                                          |
+| Study manually constructed GCV curves               | `Manual_Full_Field_Grid.csv`                                   |
+| Study manual minima and regime preferences          | `Manual_Candidate_Minima.csv`, `Manual_Full_Field_Summary.csv` |
+| Examine automatic GAM estimates                     | `Stage3B_Automatic_Selections.csv`                             |
+| Examine automatic estimates versus the linear limit | `Stage3B_Linear_Screen_and_Trajectories.csv`                   |
+| Study all fixed-grid GAM scores                     | `Stage3C_Full_Grid.csv`                                        |
+| Study detected minima                               | `Stage3C_Interior_Grid_Dips.csv`                               |
+| Analyze optimizer and coefficient sensitivity       | `Stage3C_Auto_vs_Grid.csv`                                     |
+| Present the results visually                        | `Stage3C_Full_Field_Diagnostics.pdf`                           |
+
+The Stage 3C comparison CSV is our most useful summary dataset, while the full grid is the most useful detailed numerical dataset. We should retain the earlier files because they document distinct experiments, not simply duplicate information.
+
+One Windows-specific note: your screenshots show CSV files with Excel icons. They are still CSV files, not Excel workbooks. Windows is simply displaying the application associated with the `.csv` extension.
+
+# 22. Where we stand before Stage 4
+
+We have completed three levels of analysis:
+
+| Research question                                                          | Result                                                         |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| What does the full dataset contain?                                        | Established in Stage 1                                         |
+| What is the shape of the GCV criterion across the field?                   | Investigated in Stage 2 and Stage 3C                           |
+| Does automatic smoothing selection always choose the lowest evaluated GCV? | No; 16 inferior selections were detected in Stage 3C           |
+| Does smoothing choice influence Product B?                                 | Yes, with different magnitudes across Eastings                 |
+| Do changes in smoothing preference always reflect optimizer failure?       | No; we have examples where the preferred regime itself changes |
+| Have all stationary points been located and verified analytically?         | Not yet                                                        |
+| Have Reiss–Ogden's \\(h_1,h_2,h_3\\) been calculated for the field?        | Not yet                                                        |
+
+Stage 4A will refine the grid-detected candidate minima.
+
+Stage 5 will examine whether the corresponding stationary points satisfy the Reiss–Ogden characterization
+
+\\[ GCV'(\lambda)=0 \iff h_2(\lambda)=h_3(\lambda), \\]
+
+under the assumptions required for that equivalence.
+
+One important distinction: our existing detection process is numerical. It identifies sampled local minima from changes in the GCV curve. It does not yet constitute a hypothesis test with a calibrated false-positive rate or a proof that every stationary point has been found.
+
+## The central takeaway
+
+Our research has progressed through this chain:
+
+\\[ \boxed{ \begin{gathered} \text{Validated harvest-strip observations}\\\ \Downarrow\\\ \text{Constructed full-field GCV landscapes}\\\ \Downarrow\\\ \text{Detected competing smoothing candidates}\\\ \Downarrow\\\ \text{Identified inferior automatic selections}\\\ \Downarrow\\\ \text{Measured effects on the Product B coefficient}\\\ \Downarrow\\\ \textbf{Next: Refine and theoretically characterize stationary points} \end{gathered} } \\]
+
+At the end of Stage 3C, we have a substantial and reproducible empirical diagnosis. We know where automatic smoothing selection can return inferior GCV solutions and how much those choices can affect the estimated Product B coefficient.
+
+What we have not yet established is the complete mathematical stationary-point structure or the statistical consequences for estimating the unknown treatment effect. Those are the questions for the next stages.

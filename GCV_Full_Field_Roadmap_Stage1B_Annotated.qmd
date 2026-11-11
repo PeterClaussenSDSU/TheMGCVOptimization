@@ -1,0 +1,441 @@
+---
+title: "Full-Field Harvest GCV Project: Roadmap and Stage 1B Reconciliation"
+subtitle: "Annotated, executable research notebook — original data versus three reference slices"
+author: "Research working notebook"
+date: "2026-10-14"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+execute:
+  echo: true
+  warning: true
+  message: true
+---
+
+# Purpose and evidence standard
+
+This notebook documents the **entire research workflow**, then executes **only the next required stage (1B)**. Earlier results come from the user's actual Stage 1A console output and previously executed three-slice studies. Later stages are plans, **not claimed as completed experiments**.
+
+We study the pointwise harvest model
+
+$$
+Y_{i,e}=\beta_0(e)+\beta_B(e)I(\mathrm{Product}_i=B)+f_e(N_i)+\varepsilon_{i,e},
+$$
+
+where each of the 24 passes has the same Northing and Product assignment across Eastings, and the response $Y_{i,e}$ changes with Easting $e$. The established three-slice experiments showed the estimated Product effect is sensitive to smoothing selection. Full-field work must preserve that verified baseline.
+
+**Reproducibility boundary:** We never substitute `Predicted` for `Yield`; we do not assert whether the full CSV contains raw or previously Easting-smoothed yields. Reconciliation of file values alone **cannot** establish the data-processing provenance. We keep the manual B-spline reconstruction and package-based `mgcv` comparisons as separate specifications unless formally aligned.
+
+# Roadmap: What each stage will do
+
+The stages are sequential. A failed stage blocks the next one; the outputs of each accepted stage become its reproducible evidence.
+
+## 0. Verified three-slice baseline
+
+**Scientific/computational purpose.** Preserve the three established analyses and their CSV/PDF outputs. They are historical benchmarks, not a source of extra invented estimates.
+
+**What we expect and what it means.** Our manual GCV profiles at 214/216/218; automatic-versus-fixed-grid GAM; exact-sp checks.
+
+**Output/acceptance record.** No new numerical code in this stage.
+
+## 1A. Full-data audit — completed
+
+**Scientific/computational purpose.** Establish that the complete field has one record for each Easting/PassNo pair, correct treatment balance, and fixed Product, Northing, and Pair by pass.
+
+**What we expect and what it means.** User's executed console output: 4,776 records, 199 Eastings, 24 passes, valid balance, no duplicate keys, fixed design, PASS.
+
+**Output/acceptance record.** `Easting_Audit.csv` and `Pass_Design_Audit.csv` (created by your run).
+
+## 1B. Reconcile three original slices — execute now
+
+**Scientific/computational purpose.** Compare every Yield observation and spatial/design field from the full CSV with its corresponding original 214, 216, 218 slice CSV; key by Easting + PassNo.
+
+**What we expect and what it means.** A 72-row comparison plus 3-row summary, with explicit rounding tolerances. This is the runnable code below.
+
+**Output/acceptance record.** `Stage1B_Row_Level_Reconciliation.csv`, `Stage1B_Summary.csv`, `Stage1B_Failed_Rows.csv`, `Stage1B_Provenance.txt`.
+
+## 2. Independent Base R full-field GCV — later
+
+**Scientific/computational purpose.** Reuse the common manual B-spline design and penalty across 199 response vectors; first reproduce the three verified slice outputs, then evaluate all Eastings.
+
+**What we expect and what it means.** 400 lambdas per Easting, under the same manual specification as the original QMD. Common X and S do not imply common response y.
+
+**Output/acceptance record.** Full-field manual grid, candidate-minimum table, and validation/benchmark report; not generated yet.
+
+## 3. Automatic `mgcv` full-field comparison — later
+
+**Scientific/computational purpose.** Refit the original package B-spline model automatically and on its own 600-point fixed-sp grid at all Eastings; compare within the *same* package parameterization.
+
+**What we expect and what it means.** Optimizer gap: auto GCV minus the lowest evaluated fixed-grid GCV. Cross-check earlier 214/216/218 results.
+
+**Output/acceptance record.** Per-Easting optimizer gaps, EDF and Product coefficients; not generated yet.
+
+## 4. Structural criterion analysis — later
+
+**Scientific/computational purpose.** Locate interior candidates on each GCV profile, classify them, and compare the best interior candidate with a large-sp reference and the exact linear limit when appropriate.
+
+**What we expect and what it means.** Undefined interior-gap values remain NA when no interior candidate is detected. Distinguish boundary/limit from finite stationary minima.
+
+**Output/acceptance record.** Candidate table, structural score gap, regime labels; not generated yet.
+
+## 5. Reiss–Ogden stationary conditions — later
+
+**Scientific/computational purpose.** For a verified conforming parameterization, calculate h1,h2,h3 and check predicted GCV stationary points against direct numerical derivatives/profile turning points.
+
+**What we expect and what it means.** h2=h3 detects GCV stationary candidates; h1=h2 relates to REML under the paper's assumptions. These functions are not yet computed on full-field data.
+
+**Output/acceptance record.** h-function curves and stationary-point comparisons; not generated yet.
+
+## 6. Coefficient trajectory diagnostics — later
+
+**Scientific/computational purpose.** Relate selected sp/EDF and GCV gaps to the spatial sequence of unpenalized Product B estimates; separate optimizer trapping from criterion regime-switching.
+
+**What we expect and what it means.** An association of gaps with trajectory kinks is a diagnostic, not a causal/statistical proof about the true effect.
+
+**Output/acceptance record.** Spatial trajectories, diagnostic tables and plots; not generated yet.
+
+## 7. Controlled simulation — later
+
+**Scientific/computational purpose.** Use data-generating processes with known effects and spatial signal, varying design overlap, noise, sample size, and smoothness-selection procedures.
+
+**What we expect and what it means.** Estimate bias, RMSE, selection frequencies, and interval coverage from executed simulations; no simulated results exist today.
+
+**Output/acceptance record.** Simulation protocol and results once developed.
+
+## 8. Inference and reproducible paper — later
+
+**Scientific/computational purpose.** Evaluate generality, uncertainty and publication novelty, compare with prior work, and compile only verified numerical results.
+
+**What we expect and what it means.** Distinguish descriptive optimizer diagnostics from statistical hypothesis tests. Keep independent model specifications separate.
+
+**Output/acceptance record.** A source-linked research report and methods appendix, after the preceding stages.
+
+# Stage 1A: Evidence already supplied
+
+Your attached R console record reports the successful CSV run after an initial incorrect `.xlsx` filename. The successful run found:
+
+| Audit item | Recorded result |
+|:--|:--|
+| Total records | 4,776 |
+| Easting positions | 199, from 2 to 398 in steps of 2 |
+| Passes | 24 |
+| Observations/treatments | 24 per Easting; 12 B and 12 E |
+| Duplicate Easting--PassNo keys | 0 |
+| Per-pass fixed Northing, Product, and Pair | `TRUE` |
+| Overall Stage 1A audit | `TRUE` |
+
+**Interpretation:** Stage 1A supports treating the field as 199 ordered response vectors with a common design. It does not yet prove the full CSV has the same numeric Yield values as the original three reference CSVs; Stage 1B is designed to test that.
+
+# Stage 1B: Exact file reconciliation, allowing only explicit CSV rounding
+
+**Run this stage now.** Execute the chunks from top to bottom in RStudio, or render the complete document. All code uses **Base R**; no `mgcv`, `readxl`, or other analysis package is required for Stage 1B. Quarto/R Markdown rendering itself uses the usual document engine/knitr infrastructure.
+
+## Why record-by-record reconciliation matters
+
+We need to prove the 199-Easting file reproduces the **inputs**, not merely the results, of the earlier 214/216/218 experiments. The original three slices use `Yield`, `Easting`, `PassNo`, `Pair`, `Product`, `Northing`, `Pass`, and sometimes `Predicted`. The 218 slice may have an extra unnamed CSV index column. Matching is based on **Easting plus PassNo**; irrelevant index/`Predicted` columns are ignored.
+
+The acceptance rules are:
+
+$$
+|Y_{\mathrm{full}}-Y_{\mathrm{slice}}|\leq 10^{-4},
+\qquad
+|N_{\mathrm{full}}-N_{\mathrm{slice}}|\leq 10^{-4},
+$$
+
+with *exact* agreement for Product, Pair, and Pass identifiers. The file origin (raw versus preprocessed Yield) remains an open provenance question even if all comparisons pass.
+
+## 1B.1 — Establish paths, tolerances, and a separate output folder
+
+**Purpose.** The code uses absolute paths, so rendering the document will not change the working directory of your other R projects. `data_dir` is the only user-specific directory to edit. The output folder is new and separate from `01_Data_Audit` and all prior GCV work. No original CSV is rewritten.
+
+**Why tolerances?** The slice files retain many decimal places, while a CSV export from Excel may round values. We use absolute tolerances of **0.0001 Yield units** and **0.0001 Northing units** as stated acceptance rules, not as a way to hide discrepancies. We save full differences for inspection. If your full CSV has more precision, we may tighten these later; we will not silently relax them if a check fails.
+
+```{r stage1b-1}
+# All Stage 1B numerical operations use Base R. No library() call.
+data_dir <- "C:/Users/pbbs/Claussen"
+
+full_file <- file.path(data_dir, "Example1SmoothHarvestPasses.csv")
+reference_eastings <- c(214, 216, 218)
+reference_files <- file.path(
+  data_dir,
+  paste0("Example1SmoothHarvestStrip", reference_eastings, ".csv")
+)
+
+output_dir <- file.path(
+  data_dir, "GCV_Full_Field_Project", "01B_Three_Slice_Reconciliation"
+)
+
+tol_yield <- 1e-4
+tol_northing <- 1e-4
+
+input_files <- c(full_file, reference_files)
+exists_input <- file.exists(input_files)
+print(data.frame(File = input_files, Exists = exists_input), row.names = FALSE)
+
+if (!all(exists_input)) {
+  stop("A source CSV is missing. Fix the filenames above; no analysis was performed.")
+}
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+cat("\nOUTPUT DIRECTORY:\n", output_dir, "\n")
+```
+
+**Expected:** Four files listed with `Exists = TRUE`, followed by the new output directory. If a file is missing, the script stops instead of selecting a similarly named file automatically. The `Predicted` column in the slice CSVs is intentionally **not** used: our verified regressions were based on `Yield`.
+
+## 1B.2 — Import source files and validate variable types
+
+**Purpose.** Re-read the full CSV within this document and load the three reference slices. This makes Stage 1B independently executable in a clean R session; it does not depend on objects left from Stage 1A. Both the full CSV's extra `X` index column and the 218 slice's unnamed index column are irrelevant to our comparison.
+
+The required columns are checked explicitly. We convert only the fields needed for the comparison and stop on missing or nonnumeric values rather than making substitutions.
+
+```{r stage1b-2}
+full <- read.csv(full_file, stringsAsFactors = FALSE, check.names = TRUE)
+slices <- vector("list", length(reference_eastings))
+
+required <- c("Yield", "Easting", "PassNo", "Pair",
+              "Product", "Northing", "Pass")
+num_fields <- c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")
+
+if (!all(required %in% names(full))) {
+  stop("Full CSV lacks at least one required column: ",
+       paste(setdiff(required, names(full)), collapse = ", "))
+}
+
+for (v in num_fields) {
+  full[[v]] <- suppressWarnings(as.numeric(as.character(full[[v]])))
+}
+full$Product <- trimws(as.character(full$Product))
+
+if (!all(is.finite(as.matrix(full[, num_fields])))) {
+  stop("Full CSV contains non-finite entries in a required numeric field.")
+}
+if (!all(full$Product %in% c("B", "E"))) {
+  stop("Full CSV has unexpected Product labels.")
+}
+
+for (s in seq_along(reference_files)) {
+  z <- read.csv(reference_files[s], stringsAsFactors = FALSE,
+                check.names = TRUE)
+  if (!all(required %in% names(z))) {
+    stop("Slice ", reference_eastings[s], " lacks: ",
+         paste(setdiff(required, names(z)), collapse = ", "))
+  }
+  for (v in num_fields) {
+    z[[v]] <- suppressWarnings(as.numeric(as.character(z[[v]])))
+  }
+  z$Product <- trimws(as.character(z$Product))
+  if (!all(is.finite(as.matrix(z[, num_fields])))) {
+    stop("Non-finite required numeric data in slice ", reference_eastings[s])
+  }
+  if (!all(z$Product %in% c("B", "E"))) {
+    stop("Unexpected Product in slice ", reference_eastings[s])
+  }
+  slices[[s]] <- z
+}
+
+cat("Full CSV: ", nrow(full), " rows; ", ncol(full), " columns\n", sep = "")
+for (s in seq_along(slices)) {
+  cat("Slice ", reference_eastings[s], ": ", nrow(slices[[s]]),
+      " rows\n", sep = "")
+}
+```
+
+**Expected:** `Full CSV: 4776 rows` and `Slice 214: 24 rows`, `Slice 216: 24 rows`, `Slice 218: 24 rows`. The full CSV may have an extra `X` field; the reference slices may also contain `Predicted`. Those fields are **not** data discrepancies.
+
+## 1B.3 — Reconfirm the common design before joining
+
+**Purpose.** Stage 1A passed, but this script independently checks the conditions required to compare records and later reuse the same design matrix in Stage 2. Each `(Easting, PassNo)` pair must occur once. Each reference slice must contain exactly passes 1–24, and Product/Northing/Pair must be constant for a given pass across the complete field.
+
+```{r stage1b-3}
+expected_eastings <- seq(2, 398, by = 2)
+expected_passes <- 1:24
+
+stopifnot(nrow(full) == 4776)
+stopifnot(identical(sort(unique(full$Easting)), as.numeric(expected_eastings)))
+stopifnot(identical(sort(unique(full$PassNo)), as.numeric(expected_passes)))
+
+full_keys <- paste(full$Easting, full$PassNo, sep = "_")
+stopifnot(!anyDuplicated(full_keys))
+
+for (p in expected_passes) {
+  z <- full[full$PassNo == p, , drop = FALSE]
+  if (nrow(z) != length(expected_eastings) ||
+      length(unique(z$Product)) != 1L ||
+      length(unique(z$Northing)) != 1L ||
+      length(unique(z$Pair)) != 1L ||
+      length(unique(z$Pass)) != 1L) {
+    stop("Common-design check failed for PassNo = ", p)
+  }
+}
+
+for (s in seq_along(slices)) {
+  z <- slices[[s]]
+  if (nrow(z) != 24 || any(z$Easting != reference_eastings[s]) ||
+      !identical(sort(z$PassNo), as.numeric(expected_passes)) ||
+      anyDuplicated(z$PassNo)) {
+    stop("Structure/key check failed for reference Easting ", reference_eastings[s])
+  }
+}
+cat("COMMON DESIGN AND UNIQUE KEYS: PASS\n")
+```
+
+**Expected:** `COMMON DESIGN AND UNIQUE KEYS: PASS`. This is a structural check, not a Yield comparison. If it fails, we stop; a `match()` join is not safe until the pass identities are established.
+
+## 1B.4 — Join by PassNo and calculate row-level discrepancies
+
+**Purpose.** In the full workbook, records are ordered by harvest pass and then Easting. The individual CSV slices may have a different row order. We therefore match by `PassNo` within the selected Easting instead of assuming row 1 corresponds to row 1.
+
+For each matching observation we record both versions of Yield and Northing, their absolute differences, and exact comparisons for `Product`, `Pair`, `Pass`, `Easting`, and `PassNo`. We retain every row even if it fails.
+
+```{r stage1b-4}
+row_results <- data.frame()
+
+for (s in seq_along(reference_eastings)) {
+  e <- reference_eastings[s]
+  from_full <- full[full$Easting == e, , drop = FALSE]
+  from_slice <- slices[[s]]
+
+  from_full <- from_full[order(from_full$PassNo), , drop = FALSE]
+  location <- match(from_full$PassNo, from_slice$PassNo)
+  if (anyNA(location)) stop("Could not match every PassNo at Easting ", e)
+  from_slice <- from_slice[location, , drop = FALSE]
+
+  comparison_e <- data.frame(
+    Easting = rep(e, nrow(from_full)),
+    PassNo = from_full$PassNo,
+    Full_Yield = from_full$Yield,
+    Slice_Yield = from_slice$Yield,
+    Abs_Yield_Difference = abs(from_full$Yield - from_slice$Yield),
+    Full_Northing = from_full$Northing,
+    Slice_Northing = from_slice$Northing,
+    Abs_Northing_Difference = abs(from_full$Northing - from_slice$Northing),
+    Full_Product = from_full$Product,
+    Slice_Product = from_slice$Product,
+    Full_Pair = from_full$Pair,
+    Slice_Pair = from_slice$Pair,
+    Full_Pass = from_full$Pass,
+    Slice_Pass = from_slice$Pass,
+    stringsAsFactors = FALSE
+  )
+
+  comparison_e$Yield_Match <- comparison_e$Abs_Yield_Difference <= tol_yield
+  comparison_e$Northing_Match <- comparison_e$Abs_Northing_Difference <= tol_northing
+  comparison_e$Product_Match <- comparison_e$Full_Product == comparison_e$Slice_Product
+  comparison_e$Pair_Match <- comparison_e$Full_Pair == comparison_e$Slice_Pair
+  comparison_e$Pass_Match <- comparison_e$Full_Pass == comparison_e$Slice_Pass
+
+  comparison_e$All_Match <- with(
+    comparison_e,
+    Yield_Match & Northing_Match & Product_Match & Pair_Match & Pass_Match
+  )
+
+  row_results <- rbind(row_results, comparison_e)
+}
+
+stopifnot(nrow(row_results) == 72)
+print(head(row_results[, c("Easting", "PassNo", "Full_Yield",
+                           "Slice_Yield", "Abs_Yield_Difference", "All_Match")], 9),
+      row.names = FALSE, digits = 12)
+```
+
+**Expected:** 72 matched comparisons (24 for each Easting). A nonzero difference does not automatically constitute a failure: we inspect its magnitude relative to the explicitly stated tolerance. `All_Match` must be `TRUE` for each row to pass reconciliation.
+
+## 1B.5 — Summarize the comparison and identify failures
+
+**Purpose.** Row-level matches must be reported and aggregated by Easting. The summary records maximum and mean absolute Yield discrepancies, maximum Northing discrepancy, and the number of failed rows. We do **not** claim an exact match simply because values agree after rounding.
+
+```{r stage1b-5}
+summary_results <- data.frame(
+  Easting = reference_eastings,
+  Rows_Compared = integer(length(reference_eastings)),
+  Max_Abs_Yield_Difference = numeric(length(reference_eastings)),
+  Mean_Abs_Yield_Difference = numeric(length(reference_eastings)),
+  Max_Abs_Northing_Difference = numeric(length(reference_eastings)),
+  Failed_Rows = integer(length(reference_eastings)),
+  Passed = logical(length(reference_eastings))
+)
+
+for (s in seq_along(reference_eastings)) {
+  sub <- row_results[row_results$Easting == reference_eastings[s], , drop = FALSE]
+  summary_results$Rows_Compared[s] <- nrow(sub)
+  summary_results$Max_Abs_Yield_Difference[s] <- max(sub$Abs_Yield_Difference)
+  summary_results$Mean_Abs_Yield_Difference[s] <- mean(sub$Abs_Yield_Difference)
+  summary_results$Max_Abs_Northing_Difference[s] <- max(sub$Abs_Northing_Difference)
+  summary_results$Failed_Rows[s] <- sum(!sub$All_Match)
+  summary_results$Passed[s] <- (nrow(sub) == 24 && all(sub$All_Match))
+}
+
+failed_rows <- row_results[!row_results$All_Match, , drop = FALSE]
+
+cat("\nRECONCILIATION SUMMARY:\n")
+print(summary_results, row.names = FALSE, digits = 12)
+cat("\nTOTAL FAILED ROWS:", nrow(failed_rows), "\n")
+cat("ALL 72 RECORDS MATCH:", all(summary_results$Passed), "\n")
+```
+
+**Expected for a successful reconciliation:** three rows, each with `Rows_Compared = 24`, `Failed_Rows = 0`, `Passed = TRUE`, and final `ALL 72 RECORDS MATCH: TRUE`. The exact maximum difference is **not known until you run this**; we will review it rather than insert a made-up value into the report.
+
+## 1B.6 — Save traceable outputs, then enforce the pass/fail gate
+
+**Purpose.** Regardless of whether the comparisons pass, we save the row-level and summary evidence. The provenance file identifies input paths and modification times. The code *then* stops if a difference exceeds tolerance, making it impossible to mistake a failed reconciliation for success.
+
+The outputs are new files under `01B_Three_Slice_Reconciliation`. They do not overwrite Stage 1A's audit tables or the original three-Easting GCV results.
+
+```{r stage1b-6}
+row_file <- file.path(output_dir, "Stage1B_Row_Level_Reconciliation.csv")
+summary_file <- file.path(output_dir, "Stage1B_Summary.csv")
+fail_file <- file.path(output_dir, "Stage1B_Failed_Rows.csv")
+provenance_file <- file.path(output_dir, "Stage1B_Provenance.txt")
+
+write.csv(row_results, row_file, row.names = FALSE)
+write.csv(summary_results, summary_file, row.names = FALSE)
+write.csv(failed_rows, fail_file, row.names = FALSE)
+
+metadata <- file.info(input_files)
+provenance_lines <- c(
+  "Stage 1B source-file record",
+  paste("R version:", R.version.string),
+  paste("Yield tolerance:", tol_yield),
+  paste("Northing tolerance:", tol_northing),
+  "Only Yield, Northing, Product, Pair, Pass and keyed PassNo/Easting were compared.",
+  "The slice Predicted column and extra index columns were intentionally excluded.",
+  "Input file provenance:",
+  paste(input_files, "| size bytes:", metadata$size,
+        "| modified:", as.character(metadata$mtime))
+)
+writeLines(provenance_lines, provenance_file)
+
+cat("\nSAVED FILES:\n")
+cat(row_file, "\n", summary_file, "\n", fail_file, "\n",
+    provenance_file, "\n", sep = "")
+
+if (!all(summary_results$Passed)) {
+  stop("STAGE 1B FAILED: review Stage1B_Failed_Rows.csv and the stated tolerances.")
+}
+cat("\n========================================\n")
+cat("STAGE 1B RECONCILIATION: PASS\n")
+cat("========================================\n")
+```
+
+**Expected:** four files and `STAGE 1B RECONCILIATION: PASS`. `Stage1B_Failed_Rows.csv` should contain headers but zero data rows. If the gate fails, **do not** proceed to Stage 2; send me the summary and failed rows so we can diagnose why.
+
+# How to interpret the outputs you will upload
+
+The **row-level file** is definitive: it shows both source values and the absolute differences for all 72 records. The **summary file** shows maximum discrepancies and a pass/fail indicator at each of the three reference Eastings. A successful result means the files agree **within the declared tolerances**; it does not claim bitwise identity.
+
+If all three Eastings pass, Stage 1B is accepted and our next executable notebook will be **Stage 2: full-field manual GCV reconstruction with a three-slice benchmark gate**. That code will be written only after the Stage 1B outputs are reviewed. If any row fails, we will diagnose source-path, rounding, pass-key, or preprocessing differences **before** proceeding.
+
+## What to send me
+
+Upload `Stage1B_Summary.csv` and `Stage1B_Failed_Rows.csv` (even if the latter has zero rows), along with the last console messages. If the comparison fails, also upload `Stage1B_Row_Level_Reconciliation.csv`. We will explain the findings and explicitly mark whether the stage has been accepted.
+
+## What Stage 1B cannot answer
+
+* It does not estimate GCV, EDF, or $\widehat{\beta}_B$.
+* It does not identify raw versus smoothed Yield provenance.
+* It does not establish statistical independence across adjacent Eastings.
+* It does not validate GCV's suitability for treatment-effect inference.
+
+Those are scientifically distinct questions for later stages.

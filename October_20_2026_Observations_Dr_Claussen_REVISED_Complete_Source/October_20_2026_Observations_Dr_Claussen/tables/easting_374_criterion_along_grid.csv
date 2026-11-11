@@ -1,0 +1,5 @@
+Position,log(lambda mgcv),GCV,Smooth EDF
+Grid left edge,-12.000,86.120,9.000
+First interior dip,-3.352,79.671,7.911
+Second interior dip,2.145,90.432,3.090
+Grid right edge,25.000,99.434,1.000

@@ -1,0 +1,18 @@
+\begin{longtable}{@{}p{1.2cm}p{3.1cm}p{4.2cm}p{5.8cm}@{}}
+\caption{Stage summary. Source: \texttt{Stage1B\_Summary.csv; Manual\_Full\_Field\_Summary.csv; Stage3A\_Auto\_vs\_Grid.csv; Stage3B\_Linear\_Screen\_and\_Trajectories.csv; Stage3C\_Auto\_vs\_Grid.csv}.}\label{tab:stage-summary}\\
+\toprule
+Stage & Experiment & Result & Question answered\\
+\midrule
+\endfirsthead
+\toprule
+Stage & Experiment & Result & Question answered\\
+\midrule
+\endhead
+1A & Full-data audit & 4,776 records; 199 Eastings; 24 passes & What is the design?\\
+1B & Slice reconciliation & 72 matches & Are original slices unchanged?\\
+2 & Manual GCV & 79,600 grid scores; 27 multi-minimum Eastings & What is the manually built GCV landscape?\\
+3A & mgcv pilot & 3,600 fixed fits & Can automatic selection miss better grid candidates?\\
+3B & Automatic full field & 199 automatic fits; 6 worse than linear & Where does a known lower GCV alternative exist?\\
+3C & mgcv full grid & 119,400 fits; 16 inferior selections; 28 multi-minimum Eastings & What is the full evaluated optimizer gap?\\
+\bottomrule
+\end{longtable}

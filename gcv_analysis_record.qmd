@@ -1,0 +1,1568 @@
+---
+title: "GCV Optimizer Audit: Complete Analysis Record"
+subtitle: "Every script run, with provenance, for the Claussen strip-trial reanalysis"
+author: "Reviewer working record"
+date: last-modified
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    geometry: margin=1in
+    highlight-style: github
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    embed-resources: true
+execute:
+  eval: false
+  echo: true
+  warning: false
+---
+
+# Scope, provenance, and where this code breaks the standing rules
+
+## What this document is
+
+This is the **complete executable record** of the reviewer-side analysis of the
+pointwise GCV strip-trial pipeline: every script that produced a number quoted
+in the accompanying discussion. It is a *working record*, not a thesis chapter.
+Nothing here is a substitute for the manual pipeline in
+`GCV_Manual_Annotated_Research.Rmd`; that file remains the authoritative
+from-scratch construction.
+
+Chunks are set `eval: false` at the document level so the file renders without
+re-running ~7,000 model fits. To reproduce, set `eval: true` in the YAML, or run
+the scripts individually in the order given.
+
+## Provenance labels
+
+Every code chunk carries one of three labels. **This matters: do not read an
+unlabelled number as data.**
+
+| Label | Meaning |
+|---|---|
+| `[VERBATIM]` | Exact contents of a file on disk, inserted programmatically. Not retyped. |
+| `[VERIFIED RECONSTRUCTION]` | Was originally run as an inline one-liner, not saved. Rewritten here, then **re-run and confirmed to reproduce the reported numbers to the digits shown**. The verification output is included. |
+| `[ILLUSTRATION]` | A worked example to explain a concept. Uses no project data. |
+
+There are no `[ILLUSTRATION]` chunks in this document. Every number traces to
+`Strips_1.Rda` or to a file derived from it by code printed here.
+
+## Where this violates your standing instructions
+
+Stated plainly rather than buried:
+
+1. **`library(mgcv)` is used** in Sections on the automatic pass and the grid
+   (`auto.R`, `grid_pilot.R`). This is deliberate and unavoidable. The claim
+   under audit is that *mgcv's own automatic selection* sometimes lands at a
+   worse GCV than the best available lambda. Testing that requires evaluating
+   mgcv's criterion in mgcv's own parameterization -- its knot placement,
+   its penalty scaling, its identifiability constraints. A Base R
+   reconstruction cannot falsify a claim about mgcv's optimizer, because any
+   disagreement would be attributable to the reconstruction instead. The manual
+   pipeline answers a different question and is kept separate (Section 4).
+
+2. **User-defined functions appear** in the analysis scripts (`mk`, `rg`,
+   `chk`, `cshift`, `runs`). These are *reviewer* code -- summarising and
+   testing results -- not pipeline code. Your Stage 2 pipeline is spliced in
+   unchanged and remains function-free. If the no-functions rule is meant to
+   extend to analysis code as well, Sections 7-11 need rewriting as flat loops;
+   say so and I will do it.
+
+3. **The noise-augmented conditions in Section 6 are confounded** and should be
+   treated as withdrawn. They are retained in the code for completeness and
+   because the files exist, but no conclusion in the discussion depends on them.
+   The reason is in Section 6.3.
+
+## Known gaps
+
+- The first-stage processing specification is **inferred**, not confirmed.
+  Section 3 shows the evidence for df ~ 10 over 400 m; it is not a statement of
+  what was actually done. This should be confirmed with Dr. Claussen.
+- The autocorrelation length of 28 m reported in discussion is an **upper
+  bound**: it was computed without detrending. That calculation is *not*
+  included below, because it was not saved and I will not reconstruct a number
+  I would then have to caveat twice. It needs redoing properly.
+- Nothing here addresses the design-level scale-overlap concern (treatment
+  period ~24.3 m against a resolvable smooth scale of ~18 m). That is
+  independent of all preprocessing questions and is not a code result.
+
+
+
+# What you need to run this, and in what order
+
+## The two data files
+
+| File | Where it comes from |
+|---|---|
+| `Strips_1.Rda` | Raw yield monitor data. `EastQuarter.dat` inside it is the source. |
+| `proc.csv` | **This is `Example1SmoothHarvestPasses.csv`, renamed.** |
+
+The second one caused confusion and that is my fault -- earlier versions of
+this document used `proc.csv` throughout without ever saying where it came
+from. The two files are **byte-identical**, MD5
+`2e2a10f1053e115a87c7255ec6595c11`. So:
+
+```bash
+cp Example1SmoothHarvestPasses.csv proc.csv
+```
+
+Nothing else is an input. Every other `.csv` referenced anywhere below is
+produced by a script printed in this document. You also need `mgcv`
+installed, for the reasons in Section 1.3.
+
+## Dependency order -- and a documentation bug
+
+| Step | Script | Reads | Writes |
+|---|---|---|---|
+| 1 | `regrid.R` | `Strips_1.Rda`, `proc.csv` | `unsmoothed_grid.csv` |
+| 2 | `build_ladder.R` | + `unsmoothed_grid.csv` | `COND_*.csv` (9) |
+| 3 | `grid_pilot.R` x2 | `proc.csv`, `unsmoothed_grid.csv` | `GRID_FULL_SM.csv`, `GRID_FULL_RAW.csv` |
+| 4 | `queue.sh` | `COND_*.csv` | `GRID_LADDER_*.csv` (9) |
+| 5 | `verify_recon.R` | `Strips_1.Rda`, `proc.csv`, `GRID_FULL_*.csv` | -- |
+| 6 | `an.R`-`an4.R` | all `GRID_*.csv` | -- |
+
+**The bug.** `verify_recon.R` appears as Section 4 of this document, because
+that is where the pre-smoothing evidence belongs in the argument. But blocks C
+and D of that script read `GRID_FULL_SM.csv` and `GRID_FULL_RAW.csv`, which do
+not exist until step 3. **Run in document order, it errors at Section 4.** Run
+it at step 5 instead, or delete blocks C and D if you only want the
+pre-smoothing evidence (blocks A and B need no grid output).
+
+The `run_field.R` manual pipeline and `auto.R` are independent of steps 2-6 and
+can be run any time after step 1.
+
+## Runner
+
+**[VERBATIM] `RUNME.sh`** -- does all six steps in order, with a preflight
+check that fails early and tells you which input is missing.
+
+```bash
+#!/bin/bash
+# =====================================================================
+# Complete pipeline, in dependency order.
+#
+# YOU NEED EXACTLY TWO DATA FILES in this directory:
+#   1. Strips_1.Rda                    (raw yield monitor data)
+#   2. proc.csv                        (the supplied analysis file)
+#        == Example1SmoothHarvestPasses.csv, renamed.
+#        Byte-identical: md5 2e2a10f1053e115a87c7255ec6595c11
+#        So:  cp Example1SmoothHarvestPasses.csv proc.csv
+#
+# You also need the mgcv package:  install.packages("mgcv")
+#
+# Total cost: ~1.3 million model fits. On 2 cores, several hours.
+# =====================================================================
+set -e
+cd "$(dirname "$0")"
+
+# All 199 target Eastings, 2..398 by 2, as a comma string for grid_pilot.R
+EAST=$(Rscript -e 'cat(paste(seq(2,398,by=2), collapse=","))')
+
+echo "[0/6] preflight"
+for f in Strips_1.Rda proc.csv; do
+  [ -f "$f" ] || { echo "MISSING: $f  -- see header of this script"; exit 1; }
+done
+Rscript -e 'if(!requireNamespace("mgcv",quietly=TRUE)) stop("mgcv not installed")'
+echo "      inputs present, mgcv available"
+
+echo "[1/6] regrid.R  -> unsmoothed_grid.csv"
+Rscript regrid.R
+
+echo "[2/6] build_ladder.R  -> COND_*.csv  (9 files)"
+Rscript build_ladder.R
+
+echo "[3/6] grid_pilot.R on the two primary responses (~20 min)"
+Rscript grid_pilot.R proc.csv            FULL_SM  "$EAST" 600 > g_sm.log  2>&1
+Rscript grid_pilot.R unsmoothed_grid.csv FULL_RAW "$EAST" 600 > g_raw.log 2>&1
+
+echo "[4/6] queue.sh on the nine ladder conditions (~90 min, 2 streams)"
+./queue.sh block df40 df20 df10 noise1 &
+./queue.sh noise2 noise3 noise4 noise5 &
+wait
+
+echo "[5/6] verify_recon.R  (REQUIRES step 3 -- it reads GRID_FULL_*.csv)"
+Rscript verify_recon.R
+
+echo "[6/6] diagnostic tables"
+for s in an.R an2.R an3.R an4.R; do echo "--- $s"; Rscript $s; done
+
+echo
+echo "OPTIONAL -- the manual Base R pipeline, field-wide (slow, no mgcv):"
+echo "  Rscript run_field.R proc.csv            SMOOTHED"
+echo "  Rscript run_field.R unsmoothed_grid.csv RAWGRID"
+echo "OPTIONAL -- automatic-only pass with exact linear limit:"
+echo "  Rscript auto.R proc.csv            SMOOTHED"
+echo "  Rscript auto.R unsmoothed_grid.csv RAWGRID"
+```
+
+# Source data and the unsmoothed re-grid
+
+## What the source is
+
+`Strips_1.Rda` contains two objects. `EastQuarter.dat` (6,369 rows, 23 columns;
+Products B and E; Easting 0-399.8; Northing 0-141.5) is the raw yield-monitor
+record and is the source for the supplied analysis file. `North80.dat` (5,497
+rows, Products A-I) is a different field and is not used.
+
+`proc.csv` is the supplied analysis file (`Example1SmoothHarvestPasses.csv`):
+199 Eastings (2 to 398 by 2) x 24 passes = 4,776 rows.
+
+## Why re-grid at all
+
+The supplied file is already smooth along Easting (Section 3). To separate what
+the GCV optimizer does from what the first-stage processing did, a second
+response representation is needed that shares the *layout* of the supplied file
+-- same 199 x 24 grid, same pass assignment, same Product labels -- but carries
+**unprocessed** yield values. Nearest-neighbour selection does that: it picks
+the single closest raw observation to each target Easting and copies its yield.
+No averaging, no interpolation, no smoothing. The verification block at the end
+of the script confirms the layout is faithful.
+
+## The re-grid script
+
+**[VERBATIM] `regrid.R`**
+
+```{r}
+# ---------------------------------------------------------------------------
+# UNSMOOTHED RE-GRID.  Raw EastQuarter.dat -> 199 x 24 layout, nearest
+# neighbour only.  No averaging, no interpolation, no smoothing of any kind.
+# ---------------------------------------------------------------------------
+e <- new.env(); load("Strips_1.Rda", envir = e); raw <- e$EastQuarter.dat
+proc <- read.csv("proc.csv")
+raw <- raw[is.finite(raw$Yield) & is.finite(raw$Easting) & is.finite(raw$Northing), ]
+
+# Assign raw points to the 24 passes by Northing. Pass centres are taken from
+# the PROCESSED file so the two layouts are directly comparable.
+centres <- tapply(proc$Northing, proc$PassNo, function(z) z[1])
+centres <- centres[order(as.numeric(names(centres)))]
+raw$pass <- apply(abs(outer(raw$Northing, as.numeric(centres), "-")), 1, which.min)
+
+targets <- sort(unique(proc$Easting))          # 199 values, 2..398
+out <- data.frame()
+maxdist <- 0; nties <- 0
+for (k in 1:24) {
+  s <- raw[raw$pass == k, ]
+  s <- s[order(s$Easting), ]
+  idx  <- sapply(targets, function(t) which.min(abs(s$Easting - t)))
+  dist <- abs(s$Easting[idx] - targets)
+  maxdist <- max(maxdist, max(dist))
+  nties <- nties + sum(duplicated(idx))        # target reusing the same raw point
+  pr <- proc[proc$PassNo == k, ]
+  pr <- pr[order(pr$Easting), ]
+  out <- rbind(out, data.frame(
+    Yield    = s$Yield[idx],
+    Easting  = targets,
+    PassNo   = k,
+    Pair     = pr$Pair,
+    Product  = pr$Product,
+    Northing = pr$Northing,
+    RawProduct = as.character(s$Product[idx]),
+    AssignDist = dist))
+}
+cat("re-gridded rows:", nrow(out), " (expect", 199*24, ")\n")
+cat("max |target - source| Easting distance:", sprintf("%.3f m", maxdist), "\n")
+cat("targets reusing an already-used raw point:", nties,
+    sprintf("(%.1f%%)\n", 100*nties/nrow(out)))
+cat("Product label agreement raw vs processed layout:",
+    sprintf("%.4f%%\n", 100*mean(out$RawProduct == as.character(out$Product))))
+cat("raw points assigned per pass:", paste(range(table(raw$pass)), collapse=" to "), "\n\n")
+
+rough <- function(v){ d2 <- v[-(1:2)] - 2*v[-c(1,length(v))] + v[-((length(v)-1):length(v))]
+                      sd(d2)/sd(v) }
+ru <- rp <- numeric(0)
+for (k in 1:24) {
+  a <- out[out$PassNo==k,];  a <- a[order(a$Easting),]
+  b <- proc[proc$PassNo==k,]; b <- b[order(b$Easting),]
+  ru <- c(ru, rough(a$Yield)); rp <- c(rp, rough(b$Yield))
+}
+cat("along-Easting roughness sd(d2)/sd(Y):\n")
+cat(sprintf("   RE-GRIDDED (unsmoothed): %.4f\n", mean(ru)))
+cat(sprintf("   PROCESSED  (supplied)  : %.4f\n", mean(rp)))
+cat(sprintf("   variance ratio regrid/processed: %.3f\n",
+    mean(tapply(out$Yield,out$PassNo,var))/mean(tapply(proc$Yield,proc$PassNo,var))))
+out$RawProduct <- NULL; out$AssignDist <- NULL
+write.csv(out, "unsmoothed_grid.csv", row.names = FALSE)
+cat("\nwritten: unsmoothed_grid.csv\n")
+```
+
+### Verification output obtained when this was run
+
+```
+re-gridded rows: 4776  (expect 4776)
+max |target - source| Easting distance: 0.802 m
+targets reusing an already-used raw point: 0 (0.0%)
+Product label agreement raw vs processed layout: 100.0000%
+along-Easting roughness sd(d2)/sd(Y):
+   RE-GRIDDED (unsmoothed): 1.2742
+   PROCESSED  (supplied)  : 0.0075
+   variance ratio regrid/processed: 2.018
+```
+
+Read this as: every target Easting got its own distinct raw observation, never
+more than 0.8 m away; the Product labels agree perfectly, so the treatment
+design is preserved exactly; and the re-grid is 170x rougher than the supplied
+file along Easting, at twice the variance.
+
+# Evidence that the supplied response was pre-smoothed
+
+## What is being established
+
+Not *that smoothing is wrong* -- that the supplied `Yield` column is not the
+raw yield monitor record, and roughly what operation produced it. This governs
+how the whole analysis is interpreted, so the evidence is given rather than
+asserted.
+
+Three measurements. **(A)** Along-Easting roughness, defined as the standard
+deviation of the second difference divided by the standard deviation of the
+series: a scale-free index of how much short-wavelength content a series has.
+**(B)** The smoothing-spline degrees of freedom that, applied to the raw series,
+best reproduces the supplied series. **(C)** The fraction of raw variance the
+processing removed.
+
+## Pre-smoothing detection, clustering, and the overlap test
+
+**[VERIFIED RECONSTRUCTION] `verify_recon.R`**
+
+```{r}
+# Reconstruction check: do these reproduce the numbers reported in chat?
+e <- new.env(); load("Strips_1.Rda", envir=e); raw <- e$EastQuarter.dat
+proc <- read.csv("proc.csv")
+raw <- raw[is.finite(raw$Yield)&is.finite(raw$Easting)&is.finite(raw$Northing),]
+centres <- tapply(proc$Northing, proc$PassNo, function(z) z[1])
+centres <- centres[order(as.numeric(names(centres)))]
+raw$pass <- apply(abs(outer(raw$Northing, as.numeric(centres),"-")),1,which.min)
+rg <- function(v){d2<-v[-(1:2)]-2*v[-c(1,length(v))]+v[-((length(v)-1):length(v))]; sd(d2)/sd(v)}
+
+cat("A. ROUGHNESS (reported: raw 1.1746, processed 0.0075, ratio 156x)\n")
+rr <- sapply(1:24, function(k){s<-raw[raw$pass==k,]; rg(s$Yield[order(s$Easting)])})
+rp <- sapply(1:24, function(k){s<-proc[proc$PassNo==k,]; rg(s$Yield[order(s$Easting)])})
+cat(sprintf("   raw=%.4f  processed=%.4f  ratio=%.1f\n", mean(rr), mean(rp), mean(rr)/mean(rp)))
+
+cat("\nB. df MATCH (reported: peak df~10, cor .973; .947 at df8; .969 at df12)\n")
+tg <- sort(unique(proc$Easting))
+for (dfv in c(8,10,12)) {
+  cc <- sapply(1:24, function(k){ s<-raw[raw$pass==k,]; s<-s[order(s$Easting),]
+    m <- predict(smooth.spline(s$Easting,s$Yield,df=dfv), tg)$y
+    pv <- proc$Yield[proc$PassNo==k][order(proc$Easting[proc$PassNo==k])]
+    cor(m, pv) })
+  cat(sprintf("   df=%2d  mean cor = %.4f\n", dfv, mean(cc)))
+}
+cat(sprintf("   variance removed by processing: %.1f%%\n",
+    100*(1 - mean(tapply(proc$Yield,proc$PassNo,var))/mean(tapply(raw$Yield,raw$pass,var)))))
+
+cat("\nC. CLUSTERING of processed flagged set (reported: 7 runs vs 14.8, P<0.0001)\n")
+sm <- read.csv("GRID_FULL_SM.csv"); ix <- which(sm$D_opt > 1e-4); n <- 199
+runs <- function(a) if(!length(a)) 0 else sum(diff(sort(a))!=1)+1
+set.seed(1); nullr <- replicate(20000, runs(sample(n, length(ix))))
+cat(sprintf("   m=%d observed runs=%d  E=%.1f  P(runs<=obs)=%.5f\n",
+    length(ix), runs(ix), mean(nullr), mean(nullr <= runs(ix))))
+
+cat("\nD. CIRCULAR SHIFT, SM vs RAW overlap (reported: obs 1, mean 1.61, range 0-5, P=0.5276)\n")
+rw <- read.csv("GRID_FULL_RAW.csv"); ia <- which(rw$D_opt > 1e-4)
+nul <- sapply(0:(n-1), function(s) length(intersect(ia, ((ix-1+s)%%n)+1)))
+o <- length(intersect(ia,ix))
+cat(sprintf("   obs=%d mean=%.2f range=%d-%d  P(<=obs)=%.4f\n",
+    o, mean(nul), min(nul), max(nul), mean(nul<=o)))
+```
+
+### Output, confirming the numbers quoted in discussion
+
+```
+A. ROUGHNESS (reported: raw 1.1746, processed 0.0075, ratio 156x)
+   raw=1.1746  processed=0.0075  ratio=155.9
+
+B. df MATCH (reported: peak df~10, cor .973; .947 at df8; .969 at df12)
+   df= 8  mean cor = 0.9466
+   df=10  mean cor = 0.9733
+   df=12  mean cor = 0.9691
+   variance removed by processing: 50.0%
+
+C. CLUSTERING of processed flagged set (reported: 7 runs vs 14.8, P<0.0001)
+   m=16 observed runs=7  E=14.8  P(runs<=obs)=0.00000
+
+D. CIRCULAR SHIFT, SM vs RAW overlap (reported: obs 1, mean 1.61, range 0-5, P=0.5276)
+   obs=1 mean=1.61 range=0-5  P(<=obs)=0.5276
+```
+
+**Interpretation.** The supplied series carries 1/156 of the raw series'
+short-wavelength content and has had exactly half its variance removed. A
+smoothing spline at df ~ 10 across the 400 m transect reproduces it at
+correlation 0.973, with 8 and 12 both worse -- a clear interior maximum, which
+is what makes df ~ 10 the best single description rather than an arbitrary pick.
+
+**This is an inference about what was done, not a record of it.** Confirm with
+Dr. Claussen.
+
+Blocks C and D belong to Sections 8-9 but are computed in the same script and
+are shown here once rather than twice.
+
+# The manual Stage 2 pipeline, spliced to run field-wide
+
+## Why splice rather than rewrite
+
+Your `GCV_Manual_Annotated_Research.Rmd` fits three Eastings (214, 216, 218).
+The field has 199. To make a field-wide statement with *your* construction --
+your extended uniform knots, your unscaled derivative penalty, your sum-to-zero
+constraint, your dip detector -- the estimation code must be left alone and only
+the data source changed. Rewriting it would make any disagreement
+un-attributable.
+
+**Steps 2-11 are byte-identical to your file.** Four locations differ, and only
+four. The diff is the authoritative record:
+
+```diff
+37,46c37,43
+< files <- c('Example1SmoothHarvestStrip214.csv',
+<            'Example1SmoothHarvestStrip216.csv',
+<            'Example1SmoothHarvestStrip218.csv')
+< eastings <- c(214, 216, 218)
+< # The uploaded Easting 218 file may be named with an added ' (1)'.
+< if (!file.exists(files[3]) && file.exists('Example1SmoothHarvestStrip218 (1).csv')) {
+<   files[3] <- 'Example1SmoothHarvestStrip218 (1).csv'
+< }
+< stopifnot(all(file.exists(files)))
+---
+> ARGS   <- commandArgs(trailingOnly = TRUE)
+> INFILE <- ARGS[1]; TAG <- ARGS[2]
+> LONG <- read.csv(INFILE, check.names = TRUE)
+> eastings <- sort(unique(LONG$Easting))
+
+55c52
+< output_dir <- file.path(getwd(), 'GCV_Manual_Results')
+---
+> output_dir <- file.path(getwd(), paste0('OUT_', TAG))
+
+64,65c61,62
+< for (s in 1:length(files)) {
+<   d <- read.csv(files[s], check.names = TRUE)
+---
+> for (s in 1:length(eastings)) {
+>   d <- LONG[LONG$Easting == eastings[s], , drop = FALSE]
+
+385,423c382,386
+  [STEP 12 three-panel PDF figure block replaced by CSV writes only]
+```
+
+67 lines differ in total, all within those four locations.
+
+## The control that makes this usable
+
+Run on the supplied data, the spliced script **reproduces
+`Manual_Full_Field_Summary.csv` at a maximum absolute difference of 0.000e+00 on
+every column**, and the interior-dip distribution matches exactly (0 dips: 10
+Eastings; 1: 162; 2: 26; 3: 1). That is what licenses using it on the re-gridded
+response: the splice changed nothing that affects the arithmetic.
+
+## Invocation
+
+```bash
+Rscript run_field.R proc.csv             SMOOTHED   # supplied response
+Rscript run_field.R unsmoothed_grid.csv  RAWGRID    # nearest-neighbour re-grid
+```
+
+The full 386-line script is `run_field.R`, supplied alongside this document.
+It is not reproduced inline because Steps 2-11 are your authorship and
+duplicating them here would create a second copy that could drift from yours.
+
+# The automatic-only pass
+
+## What this measures
+
+One `gam()` fit per Easting with automatic GCV selection, plus the **exact
+linear limit** computed in closed form by `lm()`. The linear limit is the
+lambda -> infinity end of the penalized family: the penalty's null space is
+{constant, linear}, so an infinite penalty leaves exactly an intercept, a
+product effect, and a linear Northing term. Having it in closed form gives a
+reference point that involves no optimizer at all.
+
+`D_linear = GCV_auto - GCV_linear` is therefore *not* an optimizer diagnostic.
+It measures whether a curved smooth beats a straight line. Conflating it with
+the optimizer discrepancy was the most serious error I made in this project; the
+two differ by a factor of ~500 in the median. They are kept separate everywhere
+below.
+
+## Automatic selection with exact linear limit
+
+**[VERBATIM] `auto.R`**
+
+```{r}
+suppressMessages(library(mgcv))
+A <- commandArgs(trailingOnly=TRUE); L <- read.csv(A[1]); tag <- A[2]
+es <- sort(unique(L$Easting)); out <- data.frame()
+for (e in es) {
+  d <- L[L$Easting==e,]; d$Product <- factor(d$Product, levels=c("E","B")); n <- nrow(d)
+  f <- gam(Yield ~ Product + s(Northing,bs="bs",k=10,m=c(3,2)), data=d,
+           family=gaussian(), method="GCV.Cp")
+  ed <- sum(f$edf); rss <- sum(residuals(f)^2)
+  # exact linear limit
+  lf <- lm(Yield ~ Product + I(Northing-mean(Northing)), data=d)
+  lrss <- sum(residuals(lf)^2); lg <- n*lrss/(n-3)^2
+  out <- rbind(out, data.frame(Easting=e, LogLambda=log(f$sp[1]),
+    GCV=n*rss/(n-ed)^2, Smooth_EDF=ed-2, Product_B=unname(coef(f)["ProductB"]),
+    Linear_GCV=lg, Linear_Product_B=unname(coef(lf)[2]),
+    Converged=f$converged))
+}
+out$D_linear <- out$GCV - out$Linear_GCV
+write.csv(out, paste0("AUTO_",tag,".csv"), row.names=FALSE)
+cat(tag, ": fits", nrow(out), " all converged:", all(out$Converged),
+    " inferior-to-linear (D>1e-4):", sum(out$D_linear > 1e-4), "\n")
+```
+
+# The 600-point grid: the only thing that can detect an inferior selection
+
+## The logic
+
+To say mgcv's automatic lambda is *inferior*, you need a lambda that is
+demonstrably better **under the same criterion and the same parameterization**.
+So: fit once with automatic selection; then fit 600 more times at fixed lambda
+on a log grid spanning exp(-12) to exp(25); evaluate GCV identically each time;
+and compare.
+
+`D_opt = GCV_auto - GCV_bestgrid`. If positive, a grid point the optimizer could
+have reached scored better, and the shortfall is real rather than a modelling
+disagreement.
+
+## The four diagnostics, kept distinct
+
+| Symbol | Definition | What it measures |
+|---|---|---|
+| `D_opt` | `GCV_auto - GCV_bestgrid` | Absolute optimizer shortfall |
+| `D_rel` | `D_opt / GCV_bestgrid` | Shortfall relative to attainable criterion |
+| `dB_opt` | `B_auto - B_bestgrid` | **Optimizer-induced** coefficient change |
+| `dB_linear` | `B_auto - B_linear` | **Curvature** effect: smooth vs straight line |
+
+`dB_opt` and `dB_linear` answer different questions and must never be
+substituted for one another.
+
+## Note on `method` and `sp`
+
+When `sp` is fully supplied, `method = "GCV.Cp"` has no effect -- there is
+nothing left to select. It is passed anyway so the two call sites are textually
+identical and cannot differ in any other default. It reads as though GCV is
+being minimised at each grid point when the entire point is that it is not.
+
+## Automatic fit plus 600 fixed-lambda fits per Easting
+
+**[VERBATIM] `grid_pilot.R`**
+
+```{r}
+suppressMessages(library(mgcv))
+A <- commandArgs(trailingOnly=TRUE); L <- read.csv(A[1]); tag <- A[2]
+ES <- as.numeric(strsplit(A[3],",")[[1]]); NG <- as.numeric(A[4])
+lg <- seq(-12, 25, length.out=NG)
+out <- data.frame()
+for (e in ES) {
+  d <- L[L$Easting==e,]; d$Product <- factor(d$Product, levels=c("E","B")); n <- nrow(d)
+  fa <- gam(Yield ~ Product + s(Northing,bs="bs",k=10,m=c(3,2)), data=d, method="GCV.Cp")
+  ea <- sum(fa$edf); ga <- n*sum(residuals(fa)^2)/(n-ea)^2
+  ba <- unname(coef(fa)["ProductB"])
+  g <- bb <- ed <- numeric(NG)
+  for (j in 1:NG) {
+    f <- gam(Yield ~ Product + s(Northing,bs="bs",k=10,m=c(3,2)), data=d,
+             method="GCV.Cp", sp=exp(lg[j]))
+    tt <- sum(f$edf); g[j] <- n*sum(residuals(f)^2)/(n-tt)^2
+    bb[j] <- unname(coef(f)["ProductB"]); ed[j] <- tt-2
+  }
+  jb <- which.min(g)
+  lf <- lm(Yield ~ Product + I(Northing-mean(Northing)), data=d)
+  out <- rbind(out, data.frame(Easting=e, LogLambda_auto=log(fa$sp[1]),
+    GCV_auto=ga, GCV_bestgrid=g[jb], D_opt=ga-g[jb], D_rel=(ga-g[jb])/g[jb],
+    B_auto=ba, B_bestgrid=bb[jb], dB_opt=ba-bb[jb],
+    B_linear=unname(coef(lf)[2]), dB_linear=ba-unname(coef(lf)[2]),
+    EDF_auto=ea-2, EDF_bestgrid=ed[jb],
+    LogLambda_bestgrid=lg[jb]))
+}
+write.csv(out, paste0("GRID_",tag,".csv"), row.names=FALSE)
+print(out[,c("Easting","D_opt","D_rel","dB_opt","dB_linear")], row.names=FALSE, digits=6)
+```
+
+## Run driver (two parallel streams; the machine had 2 cores)
+
+**[VERBATIM] `queue.sh`**
+
+```{bash}
+#!/bin/bash
+cd /home/claude/rda
+for c in "$@"; do
+  Rscript grid_pilot.R COND_${c}.csv LADDER_${c} "2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,88,90,92,94,96,98,100,102,104,106,108,110,112,114,116,118,120,122,124,126,128,130,132,134,136,138,140,142,144,146,148,150,152,154,156,158,160,162,164,166,168,170,172,174,176,178,180,182,184,186,188,190,192,194,196,198,200,202,204,206,208,210,212,214,216,218,220,222,224,226,228,230,232,234,236,238,240,242,244,246,248,250,252,254,256,258,260,262,264,266,268,270,272,274,276,278,280,282,284,286,288,290,292,294,296,298,300,302,304,306,308,310,312,314,316,318,320,322,324,326,328,330,332,334,336,338,340,342,344,346,348,350,352,354,356,358,360,362,364,366,368,370,372,374,376,378,380,382,384,386,388,390,392,394,396,398" 600 > q_${c}.log 2>&1
+  echo "done $c"
+done
+```
+
+**Filename note.** `grid_pilot.R` writes `GRID_<tag>.csv` and `queue.sh` passes
+tag `LADDER_<cond>`, so the ladder outputs are `GRID_LADDER_<cond>.csv`. A
+background waiter armed on `LADDER_*.csv` therefore never matched, and the
+completed runs sat unnoticed for four hours. Recorded because it cost real time.
+
+## Control on the supplied data
+
+```bash
+Rscript grid_pilot.R proc.csv            FULL_SM  "<all 199 eastings>" 600
+Rscript grid_pilot.R unsmoothed_grid.csv FULL_RAW "<all 199 eastings>" 600
+```
+
+On the supplied response this returns **16 inferior selections**, **6** with
+|dB_opt| >= 0.25 at Eastings 2, 172, 174, 214, 216, 376, and median |dB_opt| =
+**0.00220** -- matching the manuscript to five digits.
+
+# The smoothing ladder
+
+## Design
+
+Eleven conditions sharing one layout (199 x 24) and one second-stage
+specification. Only the `Yield` column differs. The point is to vary the
+first-stage response representation and see what the optimizer does.
+
+| Rung | Construction |
+|---|---|
+| `RAW` | Nearest-neighbour re-grid (Section 2) |
+| `block` | Mean of raw points within +/-1 m of each target |
+| `df40`, `df20`, `df10` | `smooth.spline` on raw at fixed df, evaluated at targets |
+| `noise1`-`noise5` | df10 fit **plus** iid noise restoring raw variance; 5 seeds |
+| `SM` | The supplied response |
+
+## Construction of the nine new conditions
+
+**[VERBATIM] `build_ladder.R`**
+
+```{r}
+# Build the seven stage-1 conditions. All share the 199x24 layout and the
+# Product/Northing/Pair columns of the supplied file; only Yield differs.
+e <- new.env(); load("Strips_1.Rda", envir=e); raw <- e$EastQuarter.dat
+proc <- read.csv("proc.csv"); nn <- read.csv("unsmoothed_grid.csv")
+raw <- raw[is.finite(raw$Yield) & is.finite(raw$Easting) & is.finite(raw$Northing),]
+centres <- tapply(proc$Northing, proc$PassNo, function(z) z[1])
+centres <- centres[order(as.numeric(names(centres)))]
+raw$pass <- apply(abs(outer(raw$Northing, as.numeric(centres), "-")), 1, which.min)
+targets <- sort(unique(proc$Easting))
+tmpl <- nn[order(nn$PassNo, nn$Easting),]          # layout donor
+
+mk <- function(yfun, name) {
+  o <- tmpl
+  for (k in 1:24) {
+    s <- raw[raw$pass==k,]; s <- s[order(s$Easting),]
+    o$Yield[o$PassNo==k] <- yfun(s, targets)
+  }
+  write.csv(o, paste0("COND_",name,".csv"), row.names=FALSE)
+  rg <- function(v){d2<-v[-(1:2)]-2*v[-c(1,length(v))]+v[-((length(v)-1):length(v))]; sd(d2)/sd(v)}
+  ru <- mean(sapply(1:24, function(k){z<-o[o$PassNo==k,]; rg(z$Yield[order(z$Easting)])}))
+  cat(sprintf("  %-12s roughness %7.4f   mean var %8.2f\n", name, ru,
+      mean(tapply(o$Yield,o$PassNo,var))))
+  invisible(o)
+}
+cat("conditions built:\n")
+# block average within each 2 m bin, nearest-point fallback for empty bins
+mk(function(s,t) sapply(t, function(tt){ i <- which(abs(s$Easting-tt) <= 1)
+    if (length(i)) mean(s$Yield[i]) else s$Yield[which.min(abs(s$Easting-tt))] }), "block")
+for (dfv in c(40,20,10))
+  mk(function(s,t) predict(smooth.spline(s$Easting, s$Yield, df=dfv), t)$y, paste0("df",dfv))
+# noise augmentation of the df=10 series, variance restored to the raw level, 5 seeds
+for (sd_i in 1:5) {
+  set.seed(1000+sd_i)
+  mk(function(s,t){ m <- predict(smooth.spline(s$Easting,s$Yield,df=10), t)$y
+      v <- var(s$Yield) - var(m); m + rnorm(length(m), 0, sqrt(max(v,0))) },
+     paste0("noise",sd_i))
+}
+```
+
+## The noise rungs are confounded -- treat as withdrawn
+
+The intent was to separate two explanations: does the criterion respond to
+response **variance**, or to response **correlation structure**? The noise rungs
+were meant to match raw variance while destroying raw structure.
+
+They do not isolate that. The construction is `df10 fit + iid noise`, so the
+**underlying signal** of those rungs is the df10 smooth -- genuinely smoother
+than raw, not merely differently correlated. Observed EDF near 2 and lambda at
+the grid ceiling in a third of slices is the *correct* response to low
+signal-to-noise against a near-linear signal. "Responds to structure" and
+"responds to SNR against a smoother signal" are not separated by this contrast.
+
+Isolating structure would need noise carrying raw's own autocorrelation --
+phase-randomised raw residuals at matched variance, preserving the spectrum.
+**That run was not done and is not recommended**, because the question it
+answers is a mechanism question that no claim in the manuscript depends on, and
+because the existing ladder already rules out a pure variance story (Section
+7.3).
+
+No conclusion anywhere in the discussion rests on the noise rungs.
+
+# Per-rung diagnostics
+
+## What each column is
+
+`nF1` counts Eastings with `D_opt > 1e-4`; `nFr` counts `D_rel > 1e-3`. Gaps are
+reported **among flagged Eastings only**, because a median over all 199 is
+dominated by the ~90% where the optimizer wins and says nothing about the
+failures. Coefficient medians are over all 199. The last block measures the
+spatial trajectory's own roughness -- the median absolute change in the
+estimated Product B effect between adjacent Eastings -- which is the quantity
+the "kink" lives in.
+
+## Eleven-condition diagnostic table
+
+**[VERBATIM] `an.R`**
+
+```{r}
+conds <- c("RAW","block","noise1","noise2","noise3","noise4","noise5","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv", paste0("GRID_LADDER_", conds[2:10], ".csv"), "GRID_FULL_SM.csv")
+D <- list(); for (i in seq_along(conds)) D[[conds[i]]] <- read.csv(fil[i])
+cat(sprintf("%-8s %5s %5s %10s %10s %10s %10s %6s %6s\n",
+  "cond","nF1","nFr","medDopt","medDrel","med|dBopt|","med|dBlin|","nB25","medEDF"))
+for (k in conds) { d <- D[[k]]
+  f1 <- d$D_opt > 1e-4; fr <- d$D_rel > 1e-3
+  cat(sprintf("%-8s %5d %5d %10.4f %10.5f %10.5f %10.5f %6d %6.2f\n", k,
+    sum(f1), sum(fr),
+    median(d$D_opt[f1]), median(d$D_rel[f1]),
+    median(abs(d$dB_opt)), median(abs(d$dB_linear)),
+    sum(abs(d$dB_opt) >= 0.25), median(d$EDF_auto)))
+}
+cat("\n-- interior minima: auto lambda strictly inside grid interior --\n")
+for (k in conds) { d <- D[[k]]
+  int <- d$LogLambda_auto > -11.9 & d$LogLambda_auto < 24.9
+  cat(sprintf("%-8s interior=%3d  atfloor=%3d  atceil=%3d\n", k, sum(int),
+    sum(d$LogLambda_auto <= -11.9), sum(d$LogLambda_auto >= 24.9)))
+}
+cat("\n-- adjacent-Easting |dBeta| median (spatial trajectory roughness) --\n")
+for (k in conds) cat(sprintf("%-8s %10.5f\n", k, median(abs(diff(D[[k]]$B_auto)))))
+```
+
+## Output
+
+```
+cond       nF1   nFr    medDopt    medDrel med|dBopt| med|dBlin|   nB25 medEDF
+RAW         20    18    32.3551    0.05075    0.00532    1.54758     14   4.44
+block       21    20    10.9849    0.02853    0.00475    1.68762     17   4.56
+noise1      31    28    17.6389    0.02527    0.00277    0.76015     24   2.71
+noise2      24    23    18.3854    0.03747    0.00189    0.52957     19   3.02
+noise3      25    19    10.5161    0.01764    0.00164    0.17371     16   2.42
+noise4      25    21    15.0838    0.02673    0.00103    0.13992     20   2.06
+noise5      21    18    25.2082    0.03460    0.00116    0.19596     17   2.05
+df40        11    10     2.4143    0.00774    0.00369    1.51243     10   5.51
+df20        17    15     4.1353    0.01840    0.00309    1.18374     12   5.39
+df10        18    16     1.6167    0.01484    0.00258    1.04550      7   5.39
+SM          16    15     3.2438    0.02298    0.00220    1.18499      6   5.50
+
+-- interior minima --
+RAW      interior=182  atfloor=  0  atceil= 17
+block    interior=185  atfloor=  0  atceil= 14
+noise1   interior=143  atfloor=  0  atceil= 56
+noise2   interior=139  atfloor=  0  atceil= 60
+noise3   interior=138  atfloor=  0  atceil= 61
+noise4   interior=133  atfloor=  0  atceil= 66
+noise5   interior=128  atfloor=  0  atceil= 71
+df40     interior=196  atfloor=  0  atceil=  3
+df20     interior=199  atfloor=  0  atceil=  0
+df10     interior=192  atfloor=  0  atceil=  7
+SM       interior=188  atfloor=  0  atceil= 11
+
+-- adjacent-Easting |dBeta| median --
+RAW 5.78682  block 5.39081  noise1 6.43923  noise2 8.57740  noise3 8.36773
+noise4 9.07596  noise5 10.23898  df40 0.82997  df20 0.48938  df10 0.15540
+SM 0.22240
+```
+
+## Two findings from this table
+
+**Inferior selections occur in all eleven conditions**, 11 to 31 out of 199,
+never zero. The manuscript's central claim is robust to every first-stage
+specification tested, and is *stronger* without the smoothing (median `D_rel`
+0.023 -> 0.051).
+
+**A pure signal-to-noise explanation is already ruled out**, without any
+additional run. Within-slice variance falls monotonically df40 -> df10
+(637.85 -> 411.70, Section 9) while flag counts **rise** 11 -> 17 -> 18. There
+is no monotone relation between response variance and optimizer failure rate.
+
+One thing unexplained: `df40` has the fewest flags (11), below both `SM` (16)
+and `RAW` (20). Flag count is not monotone in smoothing amount either. No
+mechanism offered.
+
+## The ratio that settles the kink question
+
+| | med \|dB_opt\| | med adjacent \|dB\| | ratio |
+|---|---|---|---|
+| RAW | 0.00532 | 5.78682 | 0.00092 |
+| block | 0.00475 | 5.39081 | 0.00088 |
+| df40 | 0.00369 | 0.82997 | 0.00445 |
+| df20 | 0.00309 | 0.48938 | 0.00632 |
+| df10 | 0.00258 | 0.15540 | 0.01662 |
+| SM | 0.00220 | 0.22240 | 0.00988 |
+
+The largest ratio anywhere on the ladder is 1.7%. **The optimizer cannot
+produce the kink under any preprocessing tested.** This holds on the supplied
+data without needing the preprocessing argument at all.
+
+# Spatial structure: clustering and location persistence
+
+## Why a hypergeometric test was wrong
+
+Comparing two flagged sets by hypergeometric probability assumes each set is a
+uniform random draw of positions. The supplied flagged set is **not**: it sits
+in 7 contiguous runs where 14.8 would be expected at random (Section 3, block
+C, P < 0.0001). Under clustering the hypergeometric null understates the
+variance of the overlap and the resulting P-value is not interpretable.
+
+The replacement preserves each set's own clustering exactly and randomises
+only *position*: circularly shift one set across all 199 offsets and recount the
+overlap each time. Clustering, set sizes, and run-length structure are all held
+fixed by construction.
+
+The shift at offset 0 is the identity and always reproduces the observed
+overlap, so it is included -- that is what makes the test exact -- and it sets
+the minimum attainable P-value at 1/199 = 0.00503.
+
+## Clustering baseline, pairwise overlap, rank correlations
+
+**[VERBATIM] `an2.R`**
+
+```{r}
+conds <- c("RAW","block","noise1","noise2","noise3","noise4","noise5","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv", paste0("GRID_LADDER_", conds[2:10], ".csv"), "GRID_FULL_SM.csv")
+D <- list(); for (i in seq_along(conds)) D[[conds[i]]] <- read.csv(fil[i])
+E <- D[["SM"]]$Easting; n <- length(E)
+F1 <- lapply(conds, function(k) which(D[[k]]$D_opt > 1e-4)); names(F1) <- conds
+
+# contiguous runs of flagged positions (index-adjacent)
+runs <- function(ix) if(!length(ix)) 0 else sum(diff(sort(ix)) != 1) + 1
+cat("-- flagged-set clustering: observed runs vs expected under random placement --\n")
+set.seed(11)
+for (k in conds) { ix <- F1[[k]]; m <- length(ix)
+  er <- mean(replicate(2000, runs(sample(n, m))))
+  cat(sprintf("%-8s m=%3d runs=%3d  E[runs|random]=%6.2f\n", k, m, runs(ix), er)) }
+
+# circular-shift overlap test, preserving each set's own clustering
+cshift <- function(a, b) { o <- length(intersect(a,b))
+  nul <- sapply(0:(n-1), function(s) length(intersect(a, ((b-1+s) %% n) + 1)))
+  c(o, mean(nul), mean(nul <= o)) }
+cat("\n-- pairwise: overlap | E[overlap] | P(<=obs) by circular shift | Spearman(D_rel) --\n")
+cat(sprintf("%-8s %-8s %4s %7s %7s %8s\n","A","B","ov","Enull","P","rho"))
+for (i in 1:(length(conds)-1)) for (j in (i+1):length(conds)) {
+  a <- conds[i]; b <- conds[j]; cs <- cshift(F1[[a]], F1[[b]])
+  rho <- cor(D[[a]]$D_rel, D[[b]]$D_rel, method="spearman")
+  cat(sprintf("%-8s %-8s %4d %7.2f %7.4f %8.4f\n", a,b,cs[1],cs[2],cs[3],rho)) }
+```
+
+## The tail error, and its correction
+
+`an2.R` reports `mean(nul <= o)`, a **left-tail** probability. Persistence is an
+*excess* of overlap, so the relevant tail is the right one. `an3.R` and `an4.R`
+compute `mean(nul >= o)` and apply Holm and BH corrections across all 55 pairs.
+This is corrected rather than hidden because the left-tail version reads as
+P = 1.0000 for the strongest pair, which inverts its meaning.
+
+## Right-tail excess-overlap test and the noise-seed distribution
+
+**[VERBATIM] `an3.R`**
+
+```{r}
+conds <- c("RAW","block","noise1","noise2","noise3","noise4","noise5","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv", paste0("GRID_LADDER_", conds[2:10], ".csv"), "GRID_FULL_SM.csv")
+D <- list(); for (i in seq_along(conds)) D[[conds[i]]] <- read.csv(fil[i])
+n <- 199
+F1 <- lapply(conds, function(k) which(D[[k]]$D_opt > 1e-4)); names(F1) <- conds
+cat("-- EXCESS-overlap test (right tail), circular shift preserving clustering --\n")
+cat(sprintf("%-8s %-8s %4s %7s %9s\n","A","B","ov","Enull","P_excess"))
+res <- NULL
+for (i in 1:10) for (j in (i+1):11) { a<-conds[i]; b<-conds[j]
+  o <- length(intersect(F1[[a]],F1[[b]]))
+  nul <- sapply(0:(n-1), function(s) length(intersect(F1[[a]], ((F1[[b]]-1+s)%%n)+1)))
+  p <- mean(nul >= o)
+  res <- rbind(res, data.frame(A=a,B=b,ov=o,E=mean(nul),P=p)) }
+res <- res[order(res$P),]
+print(head(res, 12), row.names=FALSE, digits=4)
+cat("\n-- noise rungs as a distribution (5 seeds) vs block and RAW --\n")
+nz <- paste0("noise",1:5)
+g <- function(f) sapply(nz, function(k) f(D[[k]]))
+tab <- rbind(
+ nFlag   = g(function(d) sum(d$D_opt>1e-4)),
+ medDrel = g(function(d) median(d$D_rel[d$D_opt>1e-4])),
+ meddBopt= g(function(d) median(abs(d$dB_opt))),
+ meddBlin= g(function(d) median(abs(d$dB_linear))),
+ interior= g(function(d) sum(d$LogLambda_auto> -11.9 & d$LogLambda_auto<24.9)),
+ medEDF  = g(function(d) median(d$EDF_auto)))
+tab <- cbind(tab, noise_med=apply(tab,1,median),
+  block=c(sum(D$block$D_opt>1e-4), median(D$block$D_rel[D$block$D_opt>1e-4]),
+          median(abs(D$block$dB_opt)), median(abs(D$block$dB_linear)),
+          sum(D$block$LogLambda_auto> -11.9 & D$block$LogLambda_auto<24.9), median(D$block$EDF_auto)),
+  RAW=c(sum(D$RAW$D_opt>1e-4), median(D$RAW$D_rel[D$RAW$D_opt>1e-4]),
+        median(abs(D$RAW$dB_opt)), median(abs(D$RAW$dB_linear)),
+        sum(D$RAW$LogLambda_auto> -11.9 & D$RAW$LogLambda_auto<24.9), median(D$RAW$EDF_auto)))
+print(round(tab,5))
+```
+
+## Multiplicity correction and the optimizer/spatial ratio
+
+**[VERBATIM] `an4.R`**
+
+```{r}
+conds <- c("RAW","block","noise1","noise2","noise3","noise4","noise5","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv", paste0("GRID_LADDER_", conds[2:10], ".csv"), "GRID_FULL_SM.csv")
+D <- list(); for (i in seq_along(conds)) D[[conds[i]]] <- read.csv(fil[i]); n <- 199
+F1 <- lapply(conds, function(k) which(D[[k]]$D_opt > 1e-4)); names(F1) <- conds
+p <- NULL
+for (i in 1:10) for (j in (i+1):11) { a<-conds[i]; b<-conds[j]
+  o <- length(intersect(F1[[a]],F1[[b]]))
+  nul <- sapply(0:(n-1), function(s) length(intersect(F1[[a]],((F1[[b]]-1+s)%%n)+1)))
+  p <- rbind(p, data.frame(pair=paste(a,b), ov=o, E=mean(nul), P=mean(nul>=o))) }
+p$Holm <- p.adjust(p$P, "holm"); p$BH <- p.adjust(p$P, "BH")
+cat("-- multiplicity: 55 pairs; test resolution floor = 1/199 =", signif(1/199,3), "--\n")
+print(head(p[order(p$P),], 6), row.names=FALSE, digits=4)
+cat("\n-- optimizer effect vs spatial trajectory, all 11 --\n")
+cat(sprintf("%-8s %12s %12s %10s\n","cond","med|dBopt|","med adj|dB|","ratio"))
+for (k in conds) { d<-D[[k]]; a<-median(abs(d$dB_opt)); b<-median(abs(diff(d$B_auto)))
+  cat(sprintf("%-8s %12.5f %12.5f %10.5f\n", k, a, b, a/b)) }
+cat("\n-- stage-1 roughness / variance of each rung's response --\n")
+for (k in c("block","df40","df20","df10","noise1","noise5")) {
+  f <- paste0("LADDER_", k, ".csv"); if (file.exists(f)) { L<-read.csv(f)
+  r<-tapply(L$Yield,L$PassNo,function(z) sd(diff(z,differences=2))/sd(z))
+  cat(sprintf("%-8s roughness=%7.4f var=%8.2f\n", k, median(r), var(L$Yield))) } }
+```
+
+## Output and what it does and does not support
+
+```
+        pair ov      E        P   Holm     BH
+   RAW block  9 2.1106 0.005025 0.2764 0.2764
+  RAW noise3  6 2.5126 0.015075 0.8141 0.2764
+   df40 df20  7 0.9397 0.015075 0.8141 0.2764
+    RAW df40  4 1.1055 0.025126 1.0000 0.3455
+ noise2 df20  5 2.0503 0.040201 1.0000 0.4146
+     df10 SM  5 1.4472 0.045226 1.0000 0.4146
+```
+
+Excess overlap concentrates in **adjacent** rungs and is absent between the
+extremes (RAW vs SM: 1 observed, 1.61 expected, P = 0.53). That ordering was
+stated in advance of seeing the results.
+
+**But nothing survives multiplicity correction**: 55 pairs tested, minimum Holm
+0.276, minimum BH 0.276. And RAW-block's P = 0.005025 is exactly 1/199, the
+resolution floor, so the test cannot distinguish it from anything smaller.
+
+**Honest verdict: location persistence is plausible and appears ordered by
+perturbation magnitude, but is not demonstrated by this experiment.** It follows
+that the earlier claim -- that location "does not transfer across response
+representations" -- was still too strong: RAW and block are two different
+representations and share 9 of ~20 flagged Eastings.
+
+## A finding that does hold: the clustering was the smoothing
+
+| condition | runs observed | E[runs \| random] |
+|---|---|---|
+| df40 / df20 / df10 / SM | 7, 7, 8, 7 | 10.4, 15.7, 16.4, 14.8 |
+| RAW / block | 16, 20 | 18.1, 18.9 |
+| noise1-5 | 19-28 | 18.9-26.4 |
+
+The smoothed rungs cluster strongly; RAW, block and every noise rung do not.
+The tidy contiguous blocks of flagged Eastings in the supplied data -- which I
+originally over-read as evidence that criterion geometry varies smoothly in
+Easting, and retracted -- are confirmed to be **put there by the first-stage
+smooth**. The retraction now has positive evidence behind it rather than being
+merely a withdrawn claim.
+
+# Variance definitions: an audit of my own inconsistency
+
+## The problem
+
+Block variance was reported as 722.88 at one point and 905.30 at another. Both
+figures were correct and they are **different quantities**, switched without
+notice:
+
+- `mean(tapply(Yield, PassNo, var))` -- mean **within-pass** variance (722.88),
+  what `build_ladder.R` prints;
+- `var(Yield)` -- **pooled** variance over all 4,776 rows (905.30).
+
+Neither is the right one. The second-stage model fits each Easting across its
+24 passes, so the quantity the fit actually sees is the **within-slice**
+variance, `mean(tapply(Yield, Easting, var))`.
+
+## All three variance definitions, plus a sort-order check
+
+**[VERBATIM] inline audit (re-runnable as written)**
+
+```{r}
+chk <- function(f,lab){ L<-read.csv(f)
+  srt <- all(sapply(split(L,L$PassNo), function(z) !is.unsorted(z$Easting)))
+  rg <- function(v){d2<-v[-(1:2)]-2*v[-c(1,length(v))]+v[-((length(v)-1):length(v))]; sd(d2)/sd(v)}
+  ru <- mean(sapply(split(L,L$PassNo), function(z) rg(z$Yield[order(z$Easting)])))
+  cat(sprintf("%-8s sorted=%-5s rough=%7.4f  within-pass=%7.2f  WITHIN-SLICE=%7.2f  pooled=%7.2f\n",
+    lab, srt, ru, mean(tapply(L$Yield,L$PassNo,var)),
+    mean(tapply(L$Yield,L$Easting,var)), var(L$Yield))) }
+chk("proc.csv","SM"); chk("unsmoothed_grid.csv","RAW")
+for(k in c("block","df40","df20","df10","noise1","noise2","noise3","noise4","noise5"))
+  chk(paste0("COND_",k,".csv"),k)
+```
+
+## Output
+
+```
+SM       sorted=TRUE  rough= 0.0075  within-pass= 375.84  WITHIN-SLICE= 472.06  pooled= 559.49
+RAW      sorted=TRUE  rough= 1.2742  within-pass= 758.60  WITHIN-SLICE= 837.44  pooled= 941.87
+block    sorted=TRUE  rough= 1.2003  within-pass= 722.88  WITHIN-SLICE= 804.33  pooled= 905.30
+df40     sorted=TRUE  rough= 0.0607  within-pass= 555.06  WITHIN-SLICE= 637.85  pooled= 738.21
+df20     sorted=TRUE  rough= 0.0218  within-pass= 455.70  WITHIN-SLICE= 547.88  pooled= 639.32
+df10     sorted=TRUE  rough= 0.0072  within-pass= 298.40  WITHIN-SLICE= 411.70  pooled= 482.56
+noise1   sorted=TRUE  rough= 1.9300  within-pass= 726.98  WITHIN-SLICE= 853.94  pooled= 906.99
+noise2   sorted=TRUE  rough= 1.9702  within-pass= 754.29  WITHIN-SLICE= 875.06  pooled= 948.32
+noise3   sorted=TRUE  rough= 1.9372  within-pass= 733.75  WITHIN-SLICE= 852.17  pooled= 918.42
+noise4   sorted=TRUE  rough= 1.9293  within-pass= 764.33  WITHIN-SLICE= 878.67  pooled= 952.92
+noise5   sorted=TRUE  rough= 1.9688  within-pass= 759.73  WITHIN-SLICE= 875.26  pooled= 938.39
+```
+
+`sorted=TRUE` everywhere matters: the roughness index differences consecutive
+rows, which is only meaningful if rows within a pass are in Easting order. They
+are.
+
+**Consequence.** The claim that block and the noise rungs "match variance" was
+overstated. On the relevant within-slice definition, block is 804 and the noise
+rungs 854-879 -- an 8% gap, falling on **opposite sides** of raw (837). Small
+against the effect sizes observed, but it is a further weakening of an already
+confounded contrast.
+
+A second, smaller inconsistency: roughness figures quoted as 1.22 and 1.94-2.01
+were medians across passes, while `build_ladder.R` prints means (1.2003 and
+1.929-1.970). Same conclusion, inconsistent numbers.
+
+# Integrity audit of the eleven grid files
+
+## What is being checked
+
+Four things, in order of how badly each would invalidate the results:
+whether derived columns actually follow from the primitives they claim to;
+whether the Easting index is the intended grid; whether anything impossible
+appears; and whether the flag counts depend on the tolerance.
+
+## Internal consistency of derived columns
+
+**[VERBATIM] inline audit**
+
+```{r}
+conds <- c("RAW","block","noise1","noise2","noise3","noise4","noise5","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv", paste0("GRID_LADDER_",conds[2:10],".csv"), "GRID_FULL_SM.csv")
+for (i in seq_along(conds)) { d <- read.csv(fil[i])
+  e1 <- max(abs(d$D_opt - (d$GCV_auto - d$GCV_bestgrid)))
+  e2 <- max(abs(d$D_rel - (d$GCV_auto - d$GCV_bestgrid)/d$GCV_bestgrid))
+  e3 <- max(abs(d$dB_opt - (d$B_auto - d$B_bestgrid)))
+  e4 <- max(abs(d$dB_linear - (d$B_auto - d$B_linear)))
+  e5 <- sum(d$GCV_auto < d$GCV_bestgrid - 1e-9)
+  cat(sprintf("%-8s maxerr Dopt=%.1e Drel=%.1e dBopt=%.1e dBlin=%.1e  auto<grid:%d\n",
+    conds[i], e1,e2,e3,e4, e5)) }
+```
+
+## Tolerance sensitivity
+
+**[VERBATIM] inline audit**
+
+```{r}
+conds <- c("RAW","block","noise1","df40","df20","df10","SM")
+fil <- c("GRID_FULL_RAW.csv","GRID_LADDER_block.csv","GRID_LADDER_noise1.csv",
+         "GRID_LADDER_df40.csv","GRID_LADDER_df20.csv","GRID_LADDER_df10.csv","GRID_FULL_SM.csv")
+for (i in seq_along(conds)) { x <- read.csv(fil[i])
+  cat(sprintf("%-8s Dopt>0:%3d  >1e-6:%3d  >1e-4:%3d  >1e-2:%3d  >1:%3d\n", conds[i],
+    sum(x$D_opt>0), sum(x$D_opt>1e-6), sum(x$D_opt>1e-4),
+    sum(x$D_opt>1e-2), sum(x$D_opt>1))) }
+```
+
+## Results
+
+**Derived columns reproduce from primitives to <= 1e-11** in all eleven files.
+
+**`GCV_auto < GCV_bestgrid` in 179 of 199 RAW slices.** This looks alarming and
+is not. mgcv optimizes lambda continuously; the grid is 600 discrete points; so
+automatic selection normally lands *between* grid points and achieves a lower
+GCV than any of them. That is the expected case. The complement is the
+diagnostic: 199 - 179 = 20, which equals `nFlag` exactly -- and the same
+identity holds in every rung.
+
+**The 1e-4 tolerance does essentially nothing:**
+
+```
+         >0   >1e-6  >1e-4  >1e-2   >1
+RAW      20    20     20     20     17
+df40     11    11     11     11     10
+SM       16    16     16     16     12
+```
+
+Four orders of magnitude, identical counts. Shortfalls are either absent or
+substantial; nothing sits near the threshold. This answers the request for a
+sensitivity check on the tolerance -- the flagged set is not an artifact of
+where the threshold was placed.
+
+**One check of mine was wrong, not the data.** An `identical(d$Easting,
+seq(2,398,by=2))` test returned FALSE for all eleven files. The cause is that
+`read.csv` returns `integer` while `seq(2,398,by=2)` is `double`, and
+`identical` is strict about type. Values agree exactly (max deviation 0).
+
+
+# Appendix: the spliced manual pipeline in full
+
+**[VERBATIM] `run_field.R`**
+
+Steps 2-11 of this script are byte-identical to your
+`GCV_Manual_Annotated_Research.Rmd`. Four locations differ and only four; the
+diff is in Section 4. It is reproduced in full here so this document is
+self-contained, but **your `.Rmd` remains the authoritative copy** -- if the two
+ever disagree, yours is right and this one has drifted.
+
+```{r}
+# ============================================================================
+# MANUAL PENALIZED CUBIC B-SPLINE GCV: CONSTRUCTION AND INTERNAL VALIDATION
+# Data: Easting slices 214, 216, and 218 (24 harvest passes per slice)
+# ============================================================================
+# RESTRICTIONS (as requested by advisor):
+#   1. No library() or require() statements; use only standard R facilities.
+#   2. No user-defined functions (no function(...) or source() of helpers).
+#   3. Explicit loops for construction, estimation, and numerical checks.
+#   4. Nothing is simulated: responses come from the three CSV files.
+#
+# WHAT IS ESTIMATED?
+#   At each Easting e, the data model is
+#     Yield_i = intercept + ProductB * I(Product_i == 'B')
+#                         + f(Northing_i) + error_i.
+#   Product E is the baseline. ProductB is the B-minus-E difference.
+#   f is a cubic B-spline with k=10 initial basis functions.
+#
+# OBJECTIVES, NOT TO BE CONFUSED:
+#   At FIXED lambda: minimize RSS + lambda * integral[f''(x)^2] dx.
+#   Across lambdas: minimize GCV = n*RSS / (n - EDF_total)^2.
+#
+# OUTPUT DIRECTORY: ./GCV_Manual_Results/
+#   GCV_long_grid.csv        all lambda fits, including ProductB and checks
+#   GCV_candidate_minima.csv detected minima, parabolic refinements, limits
+#   GCV_slice_summary.csv   comparison of grid, limit, and internal checks
+#   GCV_all_panels.pdf       GCV, EDF, ProductB versus log(lambda)
+#
+# IMPORTANT SCOPE:
+#   This is an independent BASE R mathematical reconstruction, not an
+#   exact replica of default mgcv preprocessing. The extended uniform knots
+#   and UNSCALED derivative penalty are explicit choices. The fixed-lambda
+#   internal checks below are NOT a comparison with mgcv's default optimizer.
+#   No claim of optimizer failure can be made from this script alone.
+# ============================================================================
+
+# --------------------------- STEP 0: INPUTS -------------------------------
+# Steps 2-11 below are byte-identical to GCV_Manual_Annotated_Research.Rmd.
+# Only the data source in Step 0/1 is changed: one long file, 199 Eastings.
+ARGS   <- commandArgs(trailingOnly = TRUE)
+INFILE <- ARGS[1]; TAG <- ARGS[2]
+LONG <- read.csv(INFILE, check.names = TRUE)
+eastings <- sort(unique(LONG$Easting))
+
+
+k <- 10                 # number of cubic B-spline basis functions
+p_degree <- 3          # polynomial degree (cubic)
+M <- 400                # candidate smoothing parameters
+log_lambda <- seq(-1, 23, length.out = M)
+lambda_grid <- exp(log_lambda)
+flat_tol <- 1.01        # exclude near-linear numeric wiggles from dip detector
+
+output_dir <- file.path(getwd(), paste0('OUT_', TAG))
+if (!dir.exists(output_dir)) dir.create(output_dir)
+
+# Long-form result tables: append ONCE PER SLICE, not once per grid point.
+all_grid <- NULL
+all_candidates <- NULL
+all_summary <- NULL
+
+# --------------------- STEP 1: ONE EASTING AT A TIME ----------------------
+for (s in 1:length(eastings)) {
+  d <- LONG[LONG$Easting == eastings[s], , drop = FALSE]
+  stopifnot(all(c('Yield', 'Northing', 'Product') %in% names(d)))
+  stopifnot(!anyNA(d[, c('Yield', 'Northing', 'Product')]))
+  stopifnot(all(as.character(d$Product) %in% c('E', 'B')))
+
+  # Preserve original row order. At each slice there are 24 observations.
+  y <- as.numeric(d$Yield)
+  x <- as.numeric(d$Northing)
+  P <- as.numeric(as.character(d$Product) == 'B')
+  n <- length(y)
+  stopifnot(n == 24L, length(unique(x)) == n, sum(P) == 12)
+  cat('\n=========== EASTING', eastings[s], '===========\n')
+  cat('n =', n, '    B count =', sum(P), '    E count =', n - sum(P), '\n')
+
+  # ------------------ STEP 2: EXTENDED, UNIFORM KNOTS --------------------
+  # For degree p and k basis columns we need k+p+1 knot entries.
+  # Six strictly interior knots, two data endpoints, three added knots
+  # on EACH side: 3 + 8 + 3 = 14 total entries.
+  lo <- min(x)
+  hi <- max(x)
+  n_int <- k - p_degree - 1
+  h_knot <- (hi - lo) / (n_int + 1)
+  knots <- c(lo - h_knot * (p_degree:1),
+             lo + h_knot * (0:(n_int + 1)),
+             hi + h_knot * (1:p_degree))
+  stopifnot(length(knots) == k + p_degree + 1)
+
+  # ------------------ STEP 3: COX-DE BOOR, DATA BASIS -------------------
+  # Degree zero B_{i,0}(x) is 1 if t_i <= x < t_{i+1} and 0 otherwise.
+  # Cubic basis is obtained by three successive recursive updates:
+  # B_{i,p}(x) = (x-t_i)/(t_{i+p}-t_i) B_{i,p-1}(x)
+  #            + (t_{i+p+1}-x)/(t_{i+p+1}-t_{i+1}) B_{i+1,p-1}(x).
+  nb0 <- length(knots) - 1
+  B <- matrix(0, nrow = n, ncol = nb0)
+  for (i in 1:nb0) {
+    B[, i] <- as.numeric(x >= knots[i] & x < knots[i + 1])
+  }
+  # The maximum observed x lies on a knot; assign it to LEFT interval.
+  B[x == hi, ] <- 0
+  B[x == hi, p_degree + n_int + 1] <- 1
+
+  for (pp in 1:p_degree) {
+    ncol_new <- length(knots) - 1 - pp
+    Bnew <- matrix(0, nrow = n, ncol = ncol_new)
+    for (i in 1:ncol_new) {
+      dleft <- knots[i + pp] - knots[i]
+      dright <- knots[i + pp + 1] - knots[i + 1]
+      Bnew[, i] <- (x - knots[i]) / dleft * B[, i] +
+        (knots[i + pp + 1] - x) / dright * B[, i + 1]
+    }
+    B <- Bnew
+  }
+  stopifnot(ncol(B) == k)
+
+  # Internal check A: each row of a complete B-spline basis sums to one.
+  partition_error <- max(abs(rowSums(B) - 1))
+  cat('Basis partition-of-unity max error:', partition_error, '\n')
+  stopifnot(partition_error < 1e-10)
+
+  # --------------- STEP 4: CONTINUOUS CURVATURE PENALTY ------------------
+  # Let f(x) = sum_j theta_j B_j(x).
+  # Then integral[f''(x)^2]dx = theta' S_smooth theta,
+  # with S_smooth[i,j] = integral B_i''(x) B_j''(x) dx.
+  # Cubic B'' is piecewise LINEAR; product of two B'' functions is a
+  # piecewise QUADRATIC. Simpson's rule is exact for a quadratic on each
+  # knot interval (in exact arithmetic).
+
+  # 4A. Three integration points for each span within observed range.
+  edges <- knots[knots >= lo - 1e-9 & knots <= hi + 1e-9]
+  qx <- numeric(0)
+  qw <- numeric(0)
+  for (a in 1:(length(edges) - 1)) {
+    a0 <- edges[a]
+    a1 <- edges[a + 1]
+    h <- a1 - a0
+    qx <- c(qx, a0, (a0 + a1) / 2, a1)
+    qw <- c(qw, h / 6, 4 * h / 6, h / 6)
+  }
+  nq <- length(qx)
+
+  # 4B. Construct only DEGREE ONE B-splines at integration points;
+  # twice differentiating the cubic basis reduces its degree from 3 to 1.
+  Bq <- matrix(0, nrow = nq, ncol = nb0)
+  for (i in 1:nb0) {
+    Bq[, i] <- as.numeric(qx >= knots[i] & qx < knots[i + 1])
+  }
+  for (pp in 1:1) {
+    ncol_new <- length(knots) - 1 - pp
+    Bnew <- matrix(0, nrow = nq, ncol = ncol_new)
+    for (i in 1:ncol_new) {
+      dleft <- knots[i + pp] - knots[i]
+      dright <- knots[i + pp + 1] - knots[i + 1]
+      Bnew[, i] <- (qx - knots[i]) / dleft * Bq[, i] +
+        (knots[i + pp + 1] - qx) / dright * Bq[, i + 1]
+    }
+    Bq <- Bnew
+  }
+  B1 <- Bq
+
+  # 4C. B'_{i,p}(x) = p*[B_{i,p-1}/(t_{i+p}-t_i)
+  #                       - B_{i+1,p-1}/(t_{i+p+1}-t_{i+1})].
+  # dB2 = FIRST derivative of quadratic basis; d2B = SECOND derivative
+  # of cubic basis. Despite the names, these have the right dimensions.
+  n2 <- length(knots) - 3
+  dB2 <- matrix(0, nrow = nq, ncol = n2)
+  for (i in 1:n2) {
+    dB2[, i] <- 2 * (B1[, i] / (knots[i + 2] - knots[i]) -
+                       B1[, i + 1] / (knots[i + 3] - knots[i + 1]))
+  }
+  n3 <- length(knots) - 4
+  d2B <- matrix(0, nrow = nq, ncol = n3)
+  for (i in 1:n3) {
+    d2B[, i] <- 3 * (dB2[, i] / (knots[i + 3] - knots[i]) -
+                       dB2[, i + 1] / (knots[i + 4] - knots[i + 1]))
+  }
+
+  # 4D. Compute every entry of the 10 x 10 penalty explicitly.
+  Ssmooth <- matrix(0, nrow = k, ncol = k)
+  for (i in 1:k) {
+    for (j in 1:k) {
+      Ssmooth[i, j] <- sum(qw * d2B[, i] * d2B[, j])
+    }
+  }
+
+  # Internal check B: S is symmetric and PSD with a two-dimensional
+  # nullspace (intercept and line), hence numerical rank k-2 = 8.
+  symmetry_error <- max(abs(Ssmooth - t(Ssmooth)))
+  eigenvalues <- eigen(Ssmooth, symmetric = TRUE, only.values = TRUE)$values
+  penalty_rank <- sum(eigenvalues > max(eigenvalues) * 1e-10)
+  cat('Penalty symmetry max error:', symmetry_error, '\n')
+  cat('Penalty numerical rank:', penalty_rank, 'of', k, '\n')
+  stopifnot(symmetry_error < 1e-10,
+            min(eigenvalues) > -1e-10,
+            penalty_rank == (k - 2))
+
+  # --------------- STEP 5: IDENTIFIABILITY CONSTRAINT ------------------
+  # Model intercept and spline each contain a constant. Resolve this by
+  # requiring the fitted smooth to have zero sum over observed x values:
+  #  1' B theta = 0. Orthogonal complement Z enforces this constraint.
+  Q <- qr.Q(qr(matrix(colSums(B), ncol = 1)), complete = TRUE)
+  Z <- Q[, -1, drop = FALSE]
+  Bc <- B %*% Z                      # 24 by 9
+  Sc <- t(Z) %*% Ssmooth %*% Z       # 9 by 9
+  centering_error <- max(abs(colSums(Bc)))
+  stopifnot(centering_error < 1e-9)
+
+  # ------------------- STEP 6: FULL MODEL MATRIX ------------------------
+  # X = [intercept | B-versus-E indicator | centered Northing spline].
+  # Only the spline block is penalized. k=10 yields p=11 columns.
+  X <- cbind(1, P, Bc)
+  p <- ncol(X)
+  S <- matrix(0, nrow = p, ncol = p)
+  S[3:p, 3:p] <- Sc
+  XtX <- crossprod(X)
+  Xty <- crossprod(X, y)
+  stopifnot(p == 11, qr(X)$rank == p)
+
+  # -------------- STEP 7: COMPLETE FIXED-LAMBDA SWEEP -------------------
+  # At each lambda:
+  #   K  = X'X + lambda*S
+  #   bh = solve(K, X'y)
+  #   H  = X solve(K,X') (hat/smoother matrix)
+  #   EDF_total = trace(H)
+  #   GCV = n RSS / (n-EDF_total)^2
+  # Store beta_B(lambda) as well: needed for the kink investigation.
+  gcv <- numeric(M)
+  edf_total <- numeric(M)
+  beta_B <- numeric(M)
+  rss <- numeric(M)
+  loo_fixed_basis <- rep(NA_real_, M)
+
+  for (j in 1:M) {
+    K <- XtX + lambda_grid[j] * S
+    bj <- solve(K, Xty)
+    H <- X %*% solve(K, t(X))
+    residuals_j <- as.vector(y - X %*% bj)
+    trH <- sum(diag(H))
+    rss[j] <- sum(residuals_j^2)
+    edf_total[j] <- trH
+    beta_B[j] <- bj[2, 1]
+    gcv[j] <- n * rss[j] / (n - trH)^2
+
+    # For fixed X, S, and lambda, exact linear-smoother LOOCV is
+    # mean{[(y_i - yhat_i)/(1 - H_ii)]^2}. This is NOT GCV:
+    # GCV substitutes average leverage EDF/n for the individual H_ii.
+    # Keeping the full-data basis fixed is essential for this identity.
+    if (min(1 - diag(H)) > 1e-10) {
+      loo_fixed_basis[j] <- mean((residuals_j / (1 - diag(H)))^2)
+    }
+  }
+
+  # Internal check C: increasing penalty cannot LOWER training RSS;
+  # EDF should not increase as the single lambda increases.
+  rss_violation <- min(diff(rss))
+  edf_violation <- max(diff(edf_total))
+  cat('Smallest RSS change across lambda grid:', rss_violation, '\n')
+  cat('Largest EDF change across lambda grid:', edf_violation, '\n')
+  stopifnot(rss_violation > -1e-5, edf_violation < 1e-5)
+
+  # --------- STEP 8: DETECT AND REFINE INTERIOR GCV DIPS -----------------
+  # Discrete local minimum: GCV decreases then increases.
+  # A three-point parabola proposes a minimum between grid points;
+  # the actual penalized fit is then recomputed at that proposed lambda.
+  turns <- diff(sign(diff(gcv)))
+  h_log <- log_lambda[2] - log_lambda[1]
+  slice_candidates <- NULL
+
+  for (j in 1:length(turns)) {
+    if (turns[j] == 2 && (edf_total[j + 1] - 2) > flat_tol) {
+      y1 <- gcv[j]
+      y2 <- gcv[j + 1]
+      y3 <- gcv[j + 2]
+      curvature <- y1 - 2 * y2 + y3
+      log_star <- log_lambda[j + 1]
+      if (curvature > 0) {
+        log_star <- log_lambda[j + 1] + h_log * (y1 - y3) / (2 * curvature)
+      }
+      # Bracket vertex to the two neighboring grid points to be safe.
+      log_star <- min(max(log_star, log_lambda[j]), log_lambda[j + 2])
+      lam_star <- exp(log_star)
+      Kstar <- XtX + lam_star * S
+      bstar <- solve(Kstar, Xty)
+      Hstar <- X %*% solve(Kstar, t(X))
+      rs <- as.vector(y - X %*% bstar)
+      edf_star <- sum(diag(Hstar))
+      gcv_star <- n * sum(rs^2) / (n - edf_star)^2
+      slice_candidates <- rbind(slice_candidates, data.frame(
+        Easting = eastings[s], Candidate = 'interior_refined',
+        log_lambda = log_star, lambda = lam_star,
+        GCV = gcv_star, Smooth_EDF = edf_star - 2,
+        Product_B = bstar[2, 1]))
+    }
+  }
+
+  # ---------------- STEP 9: EXPLICIT LINEAR LIMIT ------------------------
+  # As lambda -> infinity, f'' -> 0 and f(Northing) is a straight line.
+  # Its GCV is calculated EXACTLY from regression on [1, P, x], rather
+  # than assuming exp(23) is infinite. No external packages are loaded.
+  Xlin <- cbind(1, P, x - mean(x))
+  blin <- qr.solve(Xlin, y)
+  rlin <- as.vector(y - Xlin %*% blin)
+  rss_lin <- sum(rlin^2)
+  edf_lin <- ncol(Xlin)
+  gcv_lin <- n * rss_lin / (n - edf_lin)^2
+  slice_candidates <- rbind(slice_candidates, data.frame(
+    Easting = eastings[s], Candidate = 'linear_limit',
+    log_lambda = Inf, lambda = Inf,
+    GCV = gcv_lin, Smooth_EDF = 1,
+    Product_B = blin[2]))
+
+  # Include both finite GRID EDGES, neither of which is guaranteed
+  # to be the optimal candidate. This avoids calling a right-edge
+  # point a mathematical local minimum without checking its slope.
+  for (j in c(1, M)) {
+    slice_candidates <- rbind(slice_candidates, data.frame(
+      Easting = eastings[s],
+      Candidate = if (j == 1) 'left_grid_edge' else 'right_grid_edge',
+      log_lambda = log_lambda[j], lambda = lambda_grid[j],
+      GCV = gcv[j], Smooth_EDF = edf_total[j] - 2,
+      Product_B = beta_B[j]))
+  }
+
+  # For this interval, choose the lowest candidate GCV; this is not
+  # a proof that no unobserved minimum exists between grid points.
+  best_candidate <- slice_candidates[which.min(slice_candidates$GCV), ]
+  grid_best <- which.min(gcv)
+  cat('Lowest grid GCV:', format(gcv[grid_best], digits = 9),
+      ' at log(lambda)=', format(log_lambda[grid_best], digits = 6), '\n')
+  cat('Exact linear-limit GCV:', format(gcv_lin, digits = 9), '\n')
+  cat('Best listed candidate:', best_candidate$Candidate,
+      ' GCV=', format(best_candidate$GCV, digits = 9), '\n')
+  all_candidates <- rbind(all_candidates, slice_candidates)
+
+  # -------- STEP 10: INDEPENDENT FIXED-LAMBDA LEAVE-ONE-OUT CHECK -------
+  # At ONE middle-of-grid lambda, refit 3 leave-one-out datasets.
+  # IMPORTANT: X and S are HELD FIXED as when deriving the hat formula.
+  # If knots/centering/penalty were rebuilt after omitting an observation,
+  # the two expressions would not be algebraically identical.
+  cv_check_j <- floor(M / 2)
+  cv_check_lambda <- lambda_grid[cv_check_j]
+  Kcv <- XtX + cv_check_lambda * S
+  bcv <- solve(Kcv, Xty)
+  Hcv <- X %*% solve(Kcv, t(X))
+  cv_residual <- as.vector(y - X %*% bcv)
+  cv_error <- 0
+  for (i in c(1, floor(n / 2), n)) {
+    Xminus <- X[-i, , drop = FALSE]
+    yminus <- y[-i]
+    Kminus <- crossprod(Xminus) + cv_check_lambda * S
+    bminus <- solve(Kminus, crossprod(Xminus, yminus))
+    prediction_omitted <- sum(X[i, ] * bminus[, 1])
+    squared_direct <- (y[i] - prediction_omitted)^2
+    squared_hat <- (cv_residual[i] / (1 - Hcv[i, i]))^2
+    cv_error <- max(cv_error, abs(squared_direct - squared_hat))
+  }
+  cat('Fixed-basis LOOCV identity max squared-error discrepancy:', cv_error, '\n')
+  stopifnot(cv_error < 1e-5)
+
+  # ----------- STEP 11: SAVE ALL GRID VALUES AND SUMMARY ----------------
+  all_grid <- rbind(all_grid, data.frame(
+    Easting = eastings[s], log_lambda = log_lambda, lambda = lambda_grid,
+    GCV = gcv, Smooth_EDF = edf_total - 2,
+    Total_EDF = edf_total, RSS = rss,
+    Product_B = beta_B, Fixed_Basis_LOOCV = loo_fixed_basis))
+
+  all_summary <- rbind(all_summary, data.frame(
+    Easting = eastings[s], n = n, Basis_Dimension = k,
+    Basis_Partition_Error = partition_error,
+    Penalty_Rank = penalty_rank,
+    Centering_Error = centering_error,
+    GCV_Minimum_Grid = gcv[grid_best],
+    LogLambda_Minimum_Grid = log_lambda[grid_best],
+    Product_B_Grid = beta_B[grid_best],
+    GCV_Linear_Limit = gcv_lin,
+    Product_B_Linear_Limit = blin[2],
+    Lowest_Candidate = best_candidate$Candidate,
+    Lowest_Candidate_GCV = best_candidate$GCV,
+    LOOCV_Identity_Error = cv_error))
+}
+
+
+write.csv(all_summary,    file.path(output_dir, 'summary.csv'),    row.names = FALSE)
+write.csv(all_candidates, file.path(output_dir, 'candidates.csv'), row.names = FALSE)
+write.csv(all_grid,       file.path(output_dir, 'grid.csv'),       row.names = FALSE)
+cat('\nDONE', TAG, ': slices =', length(eastings), ' summary rows =', nrow(all_summary), '\n')
+```
+
+# File inventory
+
+## Inputs
+
+| File | Role |
+|---|---|
+| `Strips_1.Rda` | Raw yield monitor data; `EastQuarter.dat` is the source |
+| `proc.csv` | Supplied analysis file, 199 x 24 = 4,776 rows |
+
+## Scripts, in run order
+
+| Script | Produces |
+|---|---|
+| `regrid.R` | `unsmoothed_grid.csv` |
+| `verify_recon.R` | Pre-smoothing evidence, clustering, overlap test |
+| `run_field.R` | `OUT_SMOOTHED/`, `OUT_RAWGRID/` (manual pipeline, field-wide) |
+| `auto.R` | `AUTO_SMOOTHED.csv`, `AUTO_RAWGRID.csv` |
+| `grid_pilot.R` | `GRID_FULL_SM.csv`, `GRID_FULL_RAW.csv`, `GRID_LADDER_*.csv` |
+| `build_ladder.R` | `COND_block.csv`, `COND_df{40,20,10}.csv`, `COND_noise{1..5}.csv` |
+| `queue.sh` | Driver for the nine ladder grid runs |
+| `an.R`, `an2.R`, `an3.R`, `an4.R` | Diagnostic tables reported above |
+
+## Cost
+
+Each grid condition is 1 + 600 fits x 199 Eastings = 119,599 model fits, about
+10 minutes per condition. Eleven conditions, two cores: roughly 1.3 million
+fits.
+
+# Summary of what this record supports
+
+1. **Inferior automatic GCV selections are real and occur under every
+   first-stage specification tested** -- 11 to 31 of 199, never zero. Robust,
+   and stronger without the smoothing.
+2. **The optimizer cannot explain the kink.** The optimizer-induced coefficient
+   change is at most 1.7% of the adjacent-Easting variation on any rung. This
+   holds on the supplied data and needs no preprocessing argument.
+3. **The supplied response was pre-smoothed**, by something close to a df ~ 10
+   spline over 400 m, removing exactly half the variance. Inferred, not
+   confirmed -- check with Dr. Claussen.
+4. **The spatial clustering of flagged Eastings is an artifact of that
+   smoothing.** Unsmoothed and block conditions show no clustering.
+5. **The 1e-4 tolerance is not load-bearing.** Flag counts are unchanged across
+   four orders of magnitude.
+6. **Location persistence is plausible but not demonstrated.** Excess overlap
+   sits in adjacent rungs as predicted, but no pair survives correction for 55
+   comparisons.
+7. **Withdrawn:** the noise rungs, as confounded; the variance-match claim, as
+   overstated; and the claim that location carries no information, as too strong.
+
+# Corrections log
+
+Errors made and corrected during this work, listed so they are not
+re-introduced.
+
+| Error | Correction |
+|---|---|
+| Used `dB_linear` as "the selection effect" | It is the curvature effect. The optimizer quantity is `dB_opt`. They differ ~500x in median. |
+| Hypergeometric test on clustered sets | Replaced with circular-shift test preserving clustering. |
+| Left-tail P reported for an excess-overlap question | Recomputed as right tail, with Holm and BH. |
+| "Optimizer-discrepancy field carries no location information" | Too strong. RAW and block share 9 of ~20. |
+| Variance definition switched silently (722.88 vs 905.30) | Three definitions tabulated; within-slice is the relevant one. |
+| "Block and noise match variance" | 8% gap on the relevant definition, opposite sides of raw. |
+| iid noise "holds spatial structure fixed" | It does not; and the underlying signal also changes. Rungs withdrawn. |
+| Contiguous blocks read as smooth criterion geometry | Artifact of the smoothing; now shown positively. |
+| Three-phase structure at Easting 213-217 | Artifact of the smoothing. Retracted. |
+| Easting 374 "survives the preprocessing problem" | It does not: unsmoothed `D_rel` = -7.8e-10. |
+| 40 m resolution limit presented as derived | A heuristic. Measured autocorrelation is 28 m, itself an undetrended upper bound. |
+| Easting 214 smallest RSS change given as 8.32e-5 | Correct value 1.12e-4. |
+| Four "code errors" carried from a chat transcript | All four were errors in the transcript. The code is correct on every one. |
+

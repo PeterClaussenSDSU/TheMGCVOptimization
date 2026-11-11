@@ -1,0 +1,263 @@
+# Understanding Slide 17: Why does GCV increase at Easting 374?
+
+Yes, you are reading the graph correctly. At Easting 374, GCV increases as \\(\log(sp)\\) increases over portions of the curve, especially toward the right-hand side.
+
+That behavior is mathematically valid. GCV does not necessarily decrease as the smoothing parameter increases.
+
+There are two separate issues to understand:
+
+1. Why the GCV curve at Easting 374 has two local minima and then rises.
+2. Why our presentation uses `log(sp)` instead of \\(\log(\lambda)\\).
+
+Let's start with the notation, because it is causing unnecessary confusion.
+
+## 1. Is `sp` different from \\(\lambda\\)?
+
+No. In our `mgcv` model, `sp` is the smoothing parameter \\(\lambda\\).
+
+`sp` is simply the variable name that the R package `mgcv` uses for a smoothing parameter.
+
+Mathematically, we have written the penalized least-squares objective as
+
+\\[ \boxed{ \min\_{\boldsymbol\beta,\boldsymbol\theta} \left[ \\|\mathbf y-X\boldsymbol\beta-B\boldsymbol\theta\\|^2+ \lambda\boldsymbol\theta^\top S\boldsymbol\theta \right]. } \\]
+
+The two terms are the residual sum of squares and the smoothness penalty.
+
+In our `mgcv` implementation, supplying
+
+```
+sp = 8.644724
+```
+
+means setting the smoothing parameter to
+
+\\[ \lambda\_{\mathrm{mgcv}}=8.644724. \\]
+
+We can therefore write
+
+\\[ \boxed{ \log(sp)=\log(\lambda\_{\mathrm{mgcv}}). } \\]
+
+Here, `log()` is the natural logarithm, not the base-10 logarithm.
+
+| Statistical notation | R notation    | Meaning                                                    |
+| -------------------- | ------------- | ---------------------------------------------------------- |
+| \\(\lambda\\)        | `sp`          | Smoothing parameter                                        |
+| \\(\log\lambda\\)    | `log(sp)`     | Logarithm of the smoothing parameter                       |
+| \\(e^\ell\\)         | `exp(log_sp)` | Convert from log smoothing parameter back to \\(\lambda\\) |
+
+For example:
+
+| \\(\log(sp)\\) | \\(sp=\lambda\_{\mathrm{mgcv}}\\) | Interpretation               |
+| -------------- | --------------------------------- | ---------------------------- |
+| −5             | 0.00674                           | Relatively weak penalization |
+| −3             | 0.0498                            | Weak penalization            |
+| 0              | 1                                 | Intermediate reference value |
+| 2              | 7.389                             | Stronger penalization        |
+| 5              | 148.413                           | Much stronger penalization   |
+| 10             | 22,026.47                         | Very strong penalization     |
+
+The numbers are values of the smoothing parameter, not GCV scores.
+
+### Why I would change the presentation notation
+
+In the earlier manual analysis, we used \\(\log(\lambda)\\), while the automatic GAM figures display `log(sp)`.
+
+Although they mean the same kind of parameter, the actual numerical values are not directly comparable between the manual and `mgcv` implementations because those implementations use different spline knots and penalty scaling.
+
+For consistency, I recommend:
+
+\\[ \ell=\log\lambda\_{\mathrm{manual}} \\]
+
+for the manual analysis, and
+
+\\[ \ell=\log\lambda\_{\mathrm{mgcv}} \\]
+
+for the package-based analysis.
+
+That makes the common statistical concept clear while preserving the difference between implementations.
+
+## 2. Now look at the actual GCV curve for Easting 374
+
+This enlarged figure uses the Stage 3C results for Easting 374.
+
+Actual Easting 374 GCV curve with its competing minima and automatically selected smoothing parameter
+
+Open the enlarged Easting 374 figure
+
+Look at the shape from left to right.
+
+The curve first descends, reaches a relatively deep minimum, rises to a local maximum, descends again to a shallower minimum, and eventually rises toward a horizontal plateau.
+
+That second, shallower minimum is approximately where the automatic optimizer stopped.
+
+## 3. What happens numerically as we move along the curve?
+
+Here are actual values from your Stage 3C dataset.
+
+| Position                 | \\(\log(sp)\\) | GCV    | Smooth EDF | Interpretation                        |
+| ------------------------ | -------------- | ------ | ---------- | ------------------------------------- |
+| Very weak penalization   | −12            | 86.120 | 9.000      | Highly flexible spline                |
+| First local minimum      | −3.352         | 79.671 | 7.911      | Lowest evaluated GCV                  |
+| Local maximum            | 0.663          | 91.398 | 4.317      | Intermediate smoothing                |
+| Second local minimum     | 2.145          | 90.432 | 3.090      | Shallower GCV basin                   |
+| Automatic selection      | 2.157          | 90.432 | 3.081      | Optimizer stopped near second minimum |
+| Very strong penalization | 25             | 99.434 | 1.000      | Effectively linear Northing smooth    |
+
+Notice what is happening:
+
+Schematic of the actual two-minimum behavior. The enlarged plot above contains the numerical curve.
+
+From the first minimum to the second minimum, GCV rises overall from approximately 79.67 to 90.43, even though it briefly decreases between the local maximum and the second minimum.
+
+After the second minimum, GCV rises again until it approaches 99.43.
+
+So your observation is correct, but the curve is not monotonically increasing over its entire range.
+
+## 4. Why does increasing \\(\lambda\\) sometimes increase GCV?
+
+This is the most important statistical explanation.
+
+Recall our GCV formula:
+
+\\[ \boxed{ GCV(\lambda) = \frac{n\\,RSS(\lambda)} {\left[n-\operatorname{EDF}(\lambda)\right]^2}. } \\]
+
+There are two competing effects when we increase \\(\lambda\\).
+
+First, the spline becomes less flexible. Its effective degrees of freedom decrease. That increases the denominator of the GCV formula and, holding RSS fixed, reduces GCV. This rewards a simpler model.
+
+Second, the fit generally becomes worse on the training data. As we penalize curvature more strongly, the model cannot follow the observations as closely. RSS increases. That increases the numerator and raises GCV.
+
+GCV chooses the balance between these effects.
+
+### Let's examine the actual numbers at Easting 374
+
+| Quantity                                           | First minimum | Automatic selection | Linear limit |
+| -------------------------------------------------- | ------------- | ------------------- | ------------ |
+| Smoothing parameter \\(\lambda\_{\mathrm{mgcv}}\\) | 0.0350        | 8.6447              | \\(\infty\\) |
+| RSS                                                | 658.92        | 1,348.61            | 1,827.09     |
+| Smooth EDF                                         | 7.911         | 3.081               | 1.000        |
+| Total model EDF                                    | 9.911         | 5.081               | 3.000        |
+| GCV                                                | 79.67         | 90.43               | 99.43        |
+
+The total EDF includes the intercept, Product coefficient, and the effective degrees of freedom of the smooth.
+
+At the best evaluated minimum:
+
+\\[ GCV = \frac{24(658.92)} {(24-9.911)^2} \approx79.67. \\]
+
+At the automatic solution:
+
+\\[ GCV = \frac{24(1348.61)} {(24-5.081)^2} \approx90.43. \\]
+
+At the exact linear limit:
+
+\\[ GCV = \frac{24(1827.09)} {(24-3)^2} \approx99.43. \\]
+
+The RSS increases enough to outweigh the GCV benefit of reducing model complexity. Consequently, GCV rises.
+
+This is why the right-hand side of the curve increases as the smoothing parameter increases.
+
+A more strongly penalized model is not automatically a better model according to GCV.
+
+## 5. Why did the automatic optimizer stop at the higher minimum?
+
+Here is the key comparison.
+
+Lowest evaluated grid candidate
+
+# 79.671
+
+At \\(\log\lambda\_{\mathrm{mgcv}}\approx-3.352\\)
+
+More flexible spline
+
+Automatic GAM solution
+
+# 90.432
+
+At \\(\log\lambda\_{\mathrm{mgcv}}\approx2.157\\)
+
+Less flexible spline
+
+The automatic procedure selected a point near the second local minimum.
+
+But the first minimum has a substantially lower GCV score:
+
+\\[ \boxed{ D\_{\mathrm{opt}}(374) = 90.432-79.671 = 10.761. } \\]
+
+The criterion contains an intervening local maximum, separating these two basins.
+
+A local optimization procedure can converge to the shallower basin without exploring the other one.
+
+Our experiment demonstrates that automatic optimization returned an inferior evaluated solution. We have not separately tested the optimizer's initialization and iteration history, so the exact cause of its basin selection remains to be investigated.
+
+This is precisely where Reiss and Ogden's theory of multiple GCV stationary points becomes relevant.
+
+## 6. Why this differs from Easting 216 on the same slide
+
+Slide 17 deliberately shows two different cases.
+
+| Property                                 | Easting 216                                                     | Easting 374                                                              |
+| ---------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Automatic selection                      | Interior local minimum                                          | Second interior local minimum                                            |
+| Better-scoring alternative               | Very strongly penalized, nearly linear model                    | First interior minimum, more flexible model                              |
+| Behavior toward very large \\(\lambda\\) | GCV falls toward a lower plateau                                | GCV rises toward a higher plateau                                        |
+| Main interpretation                      | Automatic selection is inferior to the linear-limit alternative | Automatic selection is inferior to another finite-\\(\lambda\\) solution |
+
+That explains why the two curves look different.
+
+For Easting 216, increasing smoothing sufficiently far eventually produces a lower-scoring nearly linear fit.
+
+For Easting 374, increasing smoothing sufficiently far makes the criterion worse. The best evaluated option is instead found at a smaller, finite smoothing parameter.
+
+There is no contradiction between these two graphs. They show different GCV landscapes at different Eastings.
+
+## 7. Where to find the actual numbers in Excel
+
+All the numbers we have discussed come from your saved Stage 3C analysis.
+
+The primary file is:
+
+`GCV_Full_Field_Project/03C_MGCV_Fixed_Grid_Full_Field/Stage3C_Full_Grid.csv`
+
+Filter `Easting = 374`. You will have 600 rows.
+
+The relevant columns are `LogLambda`, `Lambda`, `GCV`, `Smooth_EDF`, `Product_B`, and `RSS`.
+
+Notice that the actual CSV already calls the smoothing variable `LogLambda` and `Lambda`. Only the graphical axis says `log(sp)`. So the presentation is using two labels for the same `mgcv` smoothing parameter.
+
+The second useful file, `Stage3C_Auto_vs_Grid.csv`, contains one summary row for Easting 374 with both the automatic and best-grid results.
+
+The third file, `Stage3C_Interior_Grid_Dips.csv`, contains the two detected interior minima at Easting 374.
+
+## 8. How I would correct slide 17
+
+I recommend three changes to eliminate the notation and interpretation problem.
+
+First, change the horizontal axis from
+
+`log(sp)`
+
+to
+
+\\[ \boxed{\log(\lambda\_{\mathrm{mgcv}})} \\]
+
+Second, label both minima on the Easting 374 curve. The present slide marks the automatic selection and the lowest-grid solution, but does not explicitly explain that both lie near separate local minima.
+
+Third, add this explanation in red:
+
+> Easting 374: GCV has two interior minima. Automatic smoothing selection converges near the higher-scoring minimum. Increasing penalization beyond this point raises GCV because the deterioration in fit outweighs the reduction in model complexity.
+
+For Easting 216, the corresponding explanation would be:
+
+> Easting 216: The automatic fit remains near an interior minimum, although a more strongly penalized, nearly linear model has lower GCV.
+
+This would make slide 17 much easier to interpret.
+
+### Final distinction to remember
+
+\\[ \boxed{ \begin{aligned} sp &= \lambda\_{\mathrm{mgcv}},\\\ \log(sp)&=\log(\lambda\_{\mathrm{mgcv}}),\\\ \lambda\uparrow &\Longrightarrow \text{stronger penalization},\\\ \lambda\uparrow &\not\Longrightarrow GCV\downarrow. \end{aligned} } \\]
+
+The smoothing parameter controls how much we penalize curvature. GCV evaluates whether that amount of penalization produces a favorable balance between fit and model complexity.
+
+At Easting 374, excessive smoothing worsens that balance, so GCV increases. And because the curve contains two local minima, automatic optimization can select a higher-scoring basin even though a better one is present.

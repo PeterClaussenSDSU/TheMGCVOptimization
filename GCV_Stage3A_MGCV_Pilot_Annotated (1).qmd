@@ -1,0 +1,340 @@
+---
+title: "Full-Field GCV Research — Stage 3A (Annotated Pilot)"
+subtitle: "Original mgcv B-spline: automatic smoothing versus fixed parameter grid"
+format:
+  html:
+    toc: true
+    number-sections: true
+    code-fold: false
+execute:
+  echo: true
+  warning: true
+  message: true
+---
+
+# Stage 3A — Automatic `mgcv` smoothing versus a fixed GCV grid
+
+## Research status and objective
+
+**Stages 1A, 1B and 2 have passed their recorded checks.** In Stage 2, a manual cubic B-spline smooth was fitted against all 199 response vectors while using a common spline design. Of 199 Eastings, 189 had one or more qualifying interior grid minima; 27 had at least two. An exact linear-limit candidate scored lowest among listed candidates at 18 Eastings. These are empirical results from the uploaded files, not a new simulation.
+
+Stage 3A evaluates an independent but *different* B-spline representation in `mgcv`. The primary question is whether the GAM optimizer's automatic choice of `sp` has an inferior GCV score to a point on a broad fixed-parameter grid. Stage 3A is **only a six-Easting pilot**, not the 199-Easting study. After a successful pilot, Stage 3B can scale the verified GAM procedure to the full field.
+
+Our GAM at Easting $e$ is
+
+$$Y_{i,e}=\beta_{0,e}+\beta_{B,e} I(\mathrm{Product}_{i}=\mathrm{B})+f_e(\mathrm{Northing}_i)+\epsilon_{i,e}.$$
+
+The measured criterion at fixed $\lambda$ is
+
+$$GCV_e(\lambda)=\frac{n\sum_i(Y_{i,e}-\widehat Y_{i,e,\lambda})^2}{[n-\operatorname{tr}(H_{e,\lambda})]^2},\qquad n=24.$$
+
+The two main comparison statistics are
+
+$$\Delta_{\mathrm{opt},e}=GCV_e(\widetilde\lambda_e)-\min_{\lambda\in\mathcal G}GCV_e(\lambda),$$
+
+$$\Delta_{\beta,e}=\widehat\beta_{B,e}(\widetilde\lambda_e)-\widehat\beta_{B,e}(\lambda_{\mathrm{best\,grid},e}).$$
+
+**Crucial distinction.** Stage 2 used a manually reconstructed continuous second-derivative penalty. Stage 3 uses `mgcv::s(..., bs="bs", k=10, m=c(3,2))`. Although both are cubic B-spline approaches and share a linear-limit interpretation, their knot structures and penalty scaling need not agree. Do not compare numerical values of $\lambda$ across these different formulations. Stage 3 compares **automatic versus fixed** within the *same* `mgcv` specification.
+
+**Packages.** `mgcv` is the only external analysis package in this stage. Run `install.packages("mgcv")` once if needed. CSV import, loops, plots, and export are Base R. There are no user-defined R functions.
+
+**Why six Eastings?** 214, 216, 218 reproduce our historical benchmark; 212 borders the 212→214 change in the manual preferred candidate; 232 and 234 span another manual preference change. The pilot therefore tests provenance and explores two neighborhoods before a costly whole-field sweep.
+
+
+## 1. Files, model settings, and package
+
+This block loads `mgcv`, declares the full-field CSV and the Stage 2 summary, and creates a new output directory. Its 600-point log-grid spans -12 to 25 exactly as in the original automatic-GAM research. Expected: all paths exist, `mgcv` version is printed, and 3,600 fixed-sp fits are announced. No model has yet been fitted.
+
+```{r stage3a-1}
+# === PART 1: Inputs, package and settings ===
+# External package: mgcv. To install ONCE, run install.packages("mgcv").
+# All other operations (CSV, math, loops and graphics) use Base R.
+if (!requireNamespace("mgcv", quietly = TRUE)) {
+  stop("Install package first: install.packages('mgcv')")
+}
+library(mgcv)
+
+data_dir <- "C:/Users/pbbs/Claussen"
+full_file <- file.path(data_dir, "Example1SmoothHarvestPasses.csv")
+manual_file <- file.path(data_dir, "GCV_Full_Field_Project", "02_Manual_Full_Field", "Manual_Full_Field_Summary.csv")
+out_dir <- file.path(data_dir, "GCV_Full_Field_Project", "03A_MGCV_Pilot")
+
+# Six pilot Eastings: three historical anchors plus adjacent transition sites.
+pilot_eastings <- c(212, 214, 216, 218, 232, 234)
+log_grid <- seq(-12, 25, length.out = 600)
+sp_grid <- exp(log_grid)
+
+stopifnot(file.exists(full_file), file.exists(manual_file))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+cat("PILOT EASTINGS:", pilot_eastings, "\n")
+cat("mgcv version:", as.character(packageVersion("mgcv")), "\n")
+cat("Requested fixed-sp fits:", length(pilot_eastings) * length(log_grid), "\n")
+```
+
+## 2. Import and fixed-design audit
+
+Convert numeric columns explicitly, sort by `PassNo`, check there are 24 observations for each selected Easting, set Product E as the reference, and verify that the Northing and treatment design is shared. Expected: a line stating all six slices share the 24-pass design; otherwise execution stops.
+
+```{r stage3a-2}
+# === PART 2: Read, sort and verify common design ===
+full <- read.csv(full_file, stringsAsFactors = FALSE, check.names = TRUE)
+required <- c("Yield", "Easting", "PassNo", "Pair", "Product", "Northing", "Pass")
+stopifnot(all(required %in% names(full)), nrow(full) == 4776)
+for (v in c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")) {
+  full[[v]] <- suppressWarnings(as.numeric(as.character(full[[v]])))
+}
+full$Product <- trimws(full$Product)
+stopifnot(all(is.finite(as.matrix(full[, c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")]))))
+stopifnot(!anyDuplicated(paste(full$Easting, full$PassNo, sep = "_")))
+
+pilot_data <- vector("list", length(pilot_eastings))
+for (s in seq_along(pilot_eastings)) {
+  z <- full[full$Easting == pilot_eastings[s], , drop = FALSE]
+  z <- z[order(z$PassNo), , drop = FALSE]
+  stopifnot(nrow(z) == 24, identical(as.numeric(z$PassNo), as.numeric(1:24)))
+  z$Product <- factor(z$Product, levels = c("E", "B"))
+  stopifnot(!anyNA(z$Product))
+  pilot_data[[s]] <- z
+}
+for (s in seq_along(pilot_data)) {
+  stopifnot(identical(pilot_data[[s]]$Northing, pilot_data[[1]]$Northing))
+  stopifnot(identical(as.character(pilot_data[[s]]$Product),
+                      as.character(pilot_data[[1]]$Product)))
+}
+cat("All six pilot slices: 24 passes, same Northing and Product design.\n")
+```
+
+## 3. Automatic selection and fixed-selected-SP verification
+
+For each Easting, fit a Gaussian GAM using `method="GCV.Cp"` without specifying `sp`. Then immediately refit at precisely the selected `sp`, compare GCV scores and Product coefficients, and retain the optimizer convergence indicator. Expected: one automatic result row per Easting and selected-SP refit differences near zero. Numerical convergence never proves global optimality.
+
+```{r stage3a-3}
+# === PART 3: Automatic GCV selection and exact-sp refit ===
+# IMPORTANT: sp OMITTED from first fit, then fixed in second fit.
+automatic <- data.frame()
+for (s in seq_along(pilot_eastings)) {
+  z <- pilot_data[[s]]
+  fit <- mgcv::gam(Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+                   data = z, family = gaussian(), method = "GCV.Cp")
+  n <- nrow(z)
+  edf_auto <- sum(fit$edf)
+  gcv_auto <- n * sum(residuals(fit)^2) / (n - edf_auto)^2
+  sp_auto <- as.numeric(fit$sp[1])
+
+  # Stage 1's equivalence: the very same selected smoothing parameter
+  # must reproduce the automatic numerical result when supplied as fixed sp.
+  fix <- mgcv::gam(Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+                   data = z, family = gaussian(), method = "GCV.Cp", sp = sp_auto)
+  edf_fix <- sum(fix$edf)
+  gcv_fix <- n * sum(residuals(fix)^2) / (n - edf_fix)^2
+  beta_auto <- unname(coef(fit)["ProductB"])
+  beta_fix <- unname(coef(fix)["ProductB"])
+
+  automatic <- rbind(automatic, data.frame(
+    Easting = pilot_eastings[s], Lambda = sp_auto,
+    LogLambda = log(sp_auto), GCV = gcv_auto,
+    Smooth_EDF = edf_auto - 2, Product_B = beta_auto,
+    Converged = isTRUE(fit$converged),
+    Selected_SP_Refit_GCV_Diff = abs(gcv_auto - gcv_fix),
+    Selected_SP_Refit_Beta_Diff = abs(beta_auto - beta_fix)
+  ))
+  cat("AUTO completed:", pilot_eastings[s], "GCV", format(gcv_auto, digits = 10), "\n")
+}
+print(automatic, row.names = FALSE, digits = 10)
+stopifnot(all(is.finite(automatic$GCV)), all(is.finite(automatic$Product_B)))
+```
+
+## 4. Broad fixed-SP grid
+
+At each of the same six Eastings, refit the *identical GAM* with `sp=exp(log_grid[j])` for 600 candidate values. Record GCV, smooth EDF and Product B. Expected: 3,600 evaluations. This is the computationally expensive section and may take several minutes. The lowest sampled score is not a proof of the continuous global minimum.
+
+```{r stage3a-4}
+# === PART 4: Fixed-sp grid for EACH pilot Easting ===
+# Same GAM formula/family/criterion as Part 3; only sp is supplied.
+# This takes substantially longer than the 6 automatic fits.
+results <- vector("list", length(pilot_eastings))
+for (s in seq_along(pilot_eastings)) {
+  z <- pilot_data[[s]]
+  gcv <- numeric(length(log_grid))
+  beta <- numeric(length(log_grid))
+  edf <- numeric(length(log_grid))
+
+  for (j in seq_along(log_grid)) {
+    f <- mgcv::gam(Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+                   data = z, family = gaussian(), method = "GCV.Cp", sp = sp_grid[j])
+    n <- nrow(z)
+    edf[j] <- sum(f$edf)
+    gcv[j] <- n * sum(residuals(f)^2) / (n - edf[j])^2
+    beta[j] <- unname(coef(f)["ProductB"])
+  }
+  results[[s]] <- data.frame(Easting = pilot_eastings[s],
+    LogLambda = log_grid, Lambda = sp_grid, GCV = gcv,
+    Smooth_EDF = edf - 2, Product_B = beta)
+  cat("GRID completed:", pilot_eastings[s], "of", length(pilot_eastings),
+      "Easting pilot profiles\n")
+}
+grid_results <- do.call(rbind, results)
+row.names(grid_results) <- NULL
+stopifnot(nrow(grid_results) == 600 * length(pilot_eastings))
+cat("Total fixed-sp grid fits:", nrow(grid_results), "\n")
+```
+
+## 5. Optimizer and coefficient gaps
+
+Identify the grid member with the lowest evaluated GCV, compute the automatic-minus-grid score gap, and compare the two Product B coefficients. Also count grid-detected finite interior dips. Expected: six comparison rows. A positive gap indicates an observed better alternative; a tiny negative gap may occur when the automatic solution lies outside the finite grid (historically at 218).
+
+```{r stage3a-5}
+# === PART 5: Compare automatic selection and fixed grid ===
+comparison <- data.frame()
+for (s in seq_along(pilot_eastings)) {
+  e <- pilot_eastings[s]
+  a <- automatic[automatic$Easting == e, , drop = FALSE]
+  g <- results[[s]]
+  jbest <- which.min(g$GCV)
+  turns <- diff(sign(diff(g$GCV)))
+  interior_indices <- which(turns == 2) + 1
+  interior_indices <- interior_indices[g$Smooth_EDF[interior_indices] > 1.01]
+  comparison <- rbind(comparison, data.frame(
+    Easting = e,
+    Automatic_LogLambda = a$LogLambda,
+    Best_Grid_LogLambda = g$LogLambda[jbest],
+    Automatic_GCV = a$GCV,
+    Best_Grid_GCV = g$GCV[jbest],
+    Optimizer_GCV_Gap = a$GCV - g$GCV[jbest],
+    Automatic_Product_B = a$Product_B,
+    Best_Grid_Product_B = g$Product_B[jbest],
+    Product_B_Difference = a$Product_B - g$Product_B[jbest],
+    Interior_Grid_Dip_Count = length(interior_indices),
+    Best_Grid_At_Right_Edge = jbest == nrow(g)
+  ))
+}
+print(comparison, row.names = FALSE, digits = 10)
+
+# Interpretation:
+# Positive gap: fixed grid contains a strictly better evaluated GCV solution.
+# A tiny negative gap can occur if automatic lambda lies OUTSIDE the grid,
+# particularly beyond its high-lambda right edge (as at 218 historically).
+# This is not a formal mathematical global-minimum proof.
+```
+
+## 6. Historical three-slice benchmark gate
+
+Independently compare the new 214, 216 and 218 automatic and best-grid scores and coefficients with the saved historical GAM experiment. Also verify that the exact-selected-sp refits agree. Expected: all three `PASS` values TRUE; otherwise the script stops before writing accepted research outputs. The tolerance is 1e-4 in this step, which allows minor package/numerical variation; differences are reported explicitly.
+
+```{r stage3a-6}
+# === PART 6: Independent historical anchors and approval gate ===
+# These numbers are quoted from our already-verified original mgcv run.
+anchors <- data.frame(
+  Easting = c(214, 216, 218),
+  Expected_Auto_GCV = c(158.473372722402, 171.450073660412, 160.229367417034),
+  Expected_Grid_GCV = c(153.498324490935, 156.334334389765, 160.229367436473),
+  Expected_Auto_Beta = c(11.3967940073536, 11.0483762591696, 11.1898747778424),
+  Expected_Grid_Beta = c(11.7552782105468, 11.4665464044115, 11.1898747782687)
+)
+benchmark <- data.frame()
+for (r in seq_len(nrow(anchors))) {
+  q <- anchors[r, ]
+  a <- automatic[automatic$Easting == q$Easting, ]
+  c <- comparison[comparison$Easting == q$Easting, ]
+  d1 <- abs(a$GCV - q$Expected_Auto_GCV)
+  d2 <- abs(c$Best_Grid_GCV - q$Expected_Grid_GCV)
+  d3 <- abs(a$Product_B - q$Expected_Auto_Beta)
+  d4 <- abs(c$Best_Grid_Product_B - q$Expected_Grid_Beta)
+  ok <- all(c(d1,d2,d3,d4) < 1e-4) && a$Selected_SP_Refit_GCV_Diff < 1e-4 &&
+        a$Selected_SP_Refit_Beta_Diff < 1e-4
+  benchmark <- rbind(benchmark, data.frame(
+    Easting = q$Easting, Auto_GCV_Abs_Diff = d1,
+    Grid_GCV_Abs_Diff = d2, Auto_Beta_Abs_Diff = d3,
+    Grid_Beta_Abs_Diff = d4, PASS = ok
+  ))
+}
+print(benchmark, row.names = FALSE, digits = 11)
+write.csv(benchmark, file.path(out_dir, "Stage3A_Historical_Benchmark.csv"), row.names = FALSE)
+if (!all(benchmark$PASS)) {
+  stop("Stage 3A benchmark failed. Historical check saved; STOP before accepting results.")
+}
+cat("STAGE 3A HISTORICAL BENCHMARK: PASS\n")
+```
+
+## 7. Comparison with Stage 2
+
+Join Stage 3A estimates to the uploaded Stage 2 manual summary. Expected: a six-row summary that permits **score/coef interpretation**, not direct numerical `sp` comparison. Divergence between specifications is not evidence of an error unless the model definitions were supposed to match.
+
+```{r stage3a-7}
+# === PART 7: Compare MODEL SCORES with manual summary (not lambda scales) ===
+manual <- read.csv(manual_file)
+manual_pilot <- manual[match(pilot_eastings, manual$Easting),
+   c("Easting", "GCV_Linear_Limit", "Product_B_Linear_Limit",
+     "Lowest_Candidate", "Lowest_Candidate_Product_B")]
+comparison_manual <- merge(comparison, manual_pilot, by = "Easting", sort = FALSE)
+comparison_manual <- comparison_manual[match(pilot_eastings, comparison_manual$Easting), ]
+# Caution: mgcv and the manual construction use different spline bases,
+# penalty matrices and lambda scaling. Compare scientific estimates and
+# score behavior carefully; do NOT compare numerical lambda values as equal.
+print(comparison_manual[, c("Easting", "Automatic_Product_B", "Best_Grid_Product_B",
+                             "Product_B_Linear_Limit", "Lowest_Candidate")],
+      row.names = FALSE, digits = 9)
+```
+
+## 8. Save results and graphical evidence
+
+After successful validation, save the automatic fits, 3,600-point grid, optimizer comparison, matched manual view, and software provenance. Produce a multipage PDF with the fixed GCV curves, automatic-selected points, and gap charts. Expected: `STAGE 3A STATUS: PASS` and files in `GCV_Full_Field_Project/03A_MGCV_Pilot`.
+
+```{r stage3a-8}
+# === PART 8: Save accepted pilot results and PDF evidence ===
+write.csv(automatic, file.path(out_dir, "Stage3A_Automatic_Selections.csv"), row.names = FALSE)
+write.csv(grid_results, file.path(out_dir, "Stage3A_Fixed_Grid.csv"), row.names = FALSE)
+write.csv(comparison, file.path(out_dir, "Stage3A_Auto_vs_Grid.csv"), row.names = FALSE)
+write.csv(comparison_manual, file.path(out_dir, "Stage3A_Model_Comparison.csv"), row.names = FALSE)
+
+pdf(file.path(out_dir, "Stage3A_GCV_Pilot_Diagnostics.pdf"), width = 11, height = 8.5)
+par(mfrow = c(3, 2), mar = c(4, 4, 3, 1))
+for (s in seq_along(pilot_eastings)) {
+  e <- pilot_eastings[s]
+  g <- results[[s]]
+  a <- automatic[automatic$Easting == e, ]
+  plot(g$LogLambda, g$GCV, type = "l", lwd = 1.6,
+       xlab = "log(lambda)", ylab = "GCV",
+       main = paste("Easting", e, "— fixed vs automatic"))
+  points(a$LogLambda, a$GCV, col = "red", pch = 19, cex = 1.1)
+  points(g$LogLambda[which.min(g$GCV)], min(g$GCV), col = "blue", pch = 19)
+  legend("topright", c("Grid curve", "Automatic selection", "Best grid"),
+         col = c("black", "red", "blue"), lty = c(1, NA, NA),
+         pch = c(NA, 19, 19), cex = 0.6, bty = "n")
+}
+par(mfrow = c(1, 1), mar = c(4, 4, 3, 1))
+plot(comparison$Easting, comparison$Optimizer_GCV_Gap, type = "b", pch = 19,
+     xlab = "Easting", ylab = "GCV(auto) - GCV(best grid)",
+     main = "Pilot optimizer score gaps")
+abline(h = 0, lty = 2, col = "gray40")
+plot(comparison$Easting, comparison$Product_B_Difference, type = "b", pch = 19,
+     xlab = "Easting", ylab = "Beta(auto) - Beta(best grid)",
+     main = "Pilot Product B coefficient differences")
+abline(h = 0, lty = 2, col = "gray40")
+dev.off()
+
+writeLines(c(
+  paste("Run timestamp:", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
+  paste("R version:", R.version.string),
+  paste("mgcv version:", as.character(packageVersion("mgcv"))),
+  paste("Input:", full_file),
+  paste("Eastings:", paste(pilot_eastings, collapse = ", ")),
+  paste("Log-lambda grid:", paste(range(log_grid), collapse = " to ")),
+  paste("Grid length:", length(log_grid)),
+  "Formula: Yield ~ Product + s(Northing, bs='bs', k=10, m=c(3,2))",
+  "Family: gaussian; method: GCV.Cp; automatic versus explicit sp grid",
+  "Historical three-slice benchmark: PASS"
+), file.path(out_dir, "Stage3A_Provenance.txt"))
+cat("STAGE 3A STATUS: PASS. Results saved to:", out_dir, "\n")
+```
+
+## Interpretation rules and Stage 3B decision
+
+1. **Historical benchmark:** all three anchors 214/216/218 must pass and be reported with numerical differences.
+2. **Automatic optimizer gap:** positive `Optimizer_GCV_Gap` means a better *evaluated grid* point exists. This is not proof the grid contains the exact global optimum.
+3. **Effect on inference:** `Product_B_Difference` is a change in the unpenalized coefficient conditional on smoothing choice; it is not by itself bias relative to a known treatment effect.
+4. **Candidate geometry:** `Interior_Grid_Dip_Count` is based on finite differences on a grid; Reiss–Ogden roots $h_2=h_3$ have not been computed.
+5. **Comparison to Stage 2:** do not transfer `sp` or interior-dip classifications between spline penalty parameterizations.
+6. **Spatial dependence:** repeated passes and possible first-stage smoothing imply adjacent Easting estimates are not independent.
+
+**Upload after completion:** `Stage3A_Historical_Benchmark.csv`, `Stage3A_Auto_vs_Grid.csv`, `Stage3A_Automatic_Selections.csv`, `Stage3A_GCV_Pilot_Diagnostics.pdf`, and, if possible, `Stage3A_Model_Comparison.csv`. We will interpret those files before authorizing the expensive 199-Easting Stage 3B run.

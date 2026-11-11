@@ -1,0 +1,171 @@
+# Slide-by-slide consistency audit: Stages 2 and 3C
+
+Your concern is justified. Most of the slides are numerically consistent, but several plot different statistics, and there is one particularly important difference around Easting 176 that deserves explanation.
+
+I checked the revised Beamer presentation, its figures, and the Stage 2 and Stage 3C CSV outputs.
+
+The main source of confusion is that the presentation alternates between three quantities:
+
+\\[ \begin{aligned} \text{Absolute GCV:}\quad &GCV_e(\lambda),\\\ \text{Relative GCV:}\quad &GCV_e(\lambda)-GCV\_{e,\infty},\\\ \text{Structural gap:}\quad &GCV\_{e,\text{best interior}}-GCV\_{e,\infty}. \end{aligned} \\]
+
+These do not have to show the same numerical values, even when they come from the same Easting and spline model.
+
+## 1. Which slides should agree?
+
+| Slide | What it plots                                                                   | Source   | Audit assessment                                                                                     |
+| ----- | ------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| 4     | Manual GCV relative to the exact linear limit                                   | Stage 2  | Consistent; not absolute GCV                                                                         |
+| 5     | Absolute manual GCV at 214, 216, 218                                            | Stage 2  | Consistent with slide 4 after subtracting the linear-limit score                                     |
+| 6     | Counts of manual interior minima and preferred candidate types                  | Stage 2  | Consistent with the manual summary                                                                   |
+| 7     | Manual lowest-candidate and linear-limit Product B coefficients                 | Stage 2  | Consistent; not an automatic `mgcv` coefficient plot                                                 |
+| 8     | Best manual interior GCV minus exact linear GCV                                 | Stage 2  | Consistent, but different from the entire landscape in slide 4                                       |
+| 9     | Manual changes between preferred interior and linear regimes                    | Stage 2  | Consistent with the manual classification                                                            |
+| 10    | Absolute `mgcv` GCV curves from the six-Easting pilot                           | Stage 3A | Consistent; uses a different spline parameterization than slide 5                                    |
+| 12    | Automatic `mgcv` versus linear-limit Product B                                  | Stage 3B | Consistent; should not generally equal slide 7                                                       |
+| 14    | `mgcv` GCV relative to the exact linear limit                                   | Stage 3C | Consistent; comparable in interpretation, but not point-for-point in log-\\(\lambda\\), with slide 4 |
+| 17    | Absolute GCV at 216 and 374, showing two kinds of inferior automatic selections | Stage 3C | Consistent; each subplot has its own GCV scale                                                       |
+
+The most important distinction is that slides 4–9 use the manual spline construction, while slides 10, 12, 14, and 17 use `mgcv`.
+
+Within each implementation, the corresponding numerical relationships should hold. Across implementations, we expect agreement at the exact linear limit, but not necessarily at a finite smoothing parameter.
+
+## 2. A numerical check at our original three Eastings
+
+These values show exactly why slides 5, 8, 10, and 17 can display different numbers without contradicting each other.
+
+| Easting | Manual interior GCV (slide 5) | Linear-limit GCV | Manual structural gap (slide 8) | Automatic `mgcv` GCV | Best-grid `mgcv` GCV |
+| ------- | ----------------------------- | ---------------- | ------------------------------- | -------------------- | -------------------- |
+| 214     | 158.422                       | 153.498          | +4.924                          | 158.473              | 153.498              |
+| 216     | 171.417                       | 156.334          | +15.082                         | 171.450              | 156.334              |
+| 218     | None detected                 | 160.229          | Undefined                       | 160.229              | 160.229              |
+
+For Easting 214, for example,
+
+\\[ \underbrace{158.422}\_{\text{Manual interior GCV}} - \underbrace{153.498}\_{\text{Linear-limit GCV}} = \underbrace{4.924}\_{\text{Slide 8 structural gap}}. \\]
+
+On slide 4, this is one location in the relative-GCV heatmap. The far-right, nearly linear portion approaches a difference of zero.
+
+Slide 10 uses `mgcv`, where the automatic GCV is 158.473 rather than 158.422. That small difference is expected because the manual and package spline constructions are not identical.
+
+The exact linear-limit values, however, agree.
+
+## 3. The important discrepancy: Easting 176
+
+This is the clearest place where slides 7, 9, and 12 genuinely differ in their scientific conclusions under the two specifications.
+
+### Easting 176 — Competing smoothing regimes
+
+Manual Stage 2
+
+Best interior GCV
+
+## 146.3298
+
+Exact linear GCV
+
+## 146.2541
+
+The linear limit wins by approximately 0.076.
+
+Selected Product B: 14.6881
+
+`mgcv` Stage 3C
+
+Best interior GCV
+
+## 146.2077
+
+Exact linear GCV
+
+## 146.2541
+
+The interior candidate wins by approximately 0.046.
+
+Best-grid Product B: 13.4384
+
+This produces a difference of approximately
+
+\\[ 14.6881-13.4384=\boxed{1.2497} \\]
+
+in the selected Product B coefficient.
+
+This is a real result, not a chart transcription error. The two spline specifications favor different smoothing regimes at a location where the criterion scores are extremely close.
+
+It explains why:
+
+- Slide 7's manual Product B trajectory does not perfectly overlap slide 12's automatic `mgcv` trajectory.
+- Slide 9 identifies a manual regime transition at 176 → 178, while the `mgcv` analysis identifies the corresponding transition at 174 → 176.
+
+Easting 176 deserves explicit attention in the presentation because a relatively small change in the criterion geometry changes which candidate is selected and leads to a substantial coefficient difference.
+
+## 4. Slide 6 versus the package-based minimum counts
+
+There is another small but genuine numerical difference.
+
+| Detected minima       | Manual Stage 2 — slide 6 | `mgcv` Stage 3C — slide 15 |
+| --------------------- | ------------------------ | -------------------------- |
+| Zero                  | 10                       | 10                         |
+| One                   | 162                      | 161                        |
+| Two                   | 26                       | 27                         |
+| Three                 | 1                        | 1                          |
+| Multiple minima total | 27                       | 28                         |
+
+I compared the classifications across all 199 Eastings.
+
+Easting 80 is the only location where the detected number of interior minima differs: one in the manual calculation and two in `mgcv`.
+
+Thus the counts reconcile completely once the difference in spline construction is acknowledged.
+
+## 5. Slide 17: Easting 374 is consistent with the heatmaps
+
+Easting 374 provides another useful direct calculation.
+
+| Quantity               | GCV    |
+| ---------------------- | ------ |
+| Exact linear limit     | 99.434 |
+| Automatic `mgcv`       | 90.432 |
+| Best fixed-grid `mgcv` | 79.671 |
+
+The optimizer gap shown by slide 17 is
+
+\\[ 90.432-79.671=\boxed{10.761}. \\]
+
+But slide 14 displays GCV relative to the linear limit:
+
+\\[ 79.671-99.434=\boxed{-19.763}. \\]
+
+These numbers are describing the same fitted solutions using different reference points.
+
+The automatic solution is better than the linear limit but worse than another finite smoothing solution. That is exactly why Easting 374 belongs to the second anomaly category on slide 17.
+
+## 6. Presentation issues I would correct
+
+The audit identified presentation problems worth fixing, even though the underlying reported results are consistent.
+
+| Slide    | Issue                                                                                                                         | Recommended correction                                                                                    |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| 4 and 14 | Relative GCV heatmaps appear visually similar, but their log-\\(\lambda\\) axes represent differently parameterized penalties | Add a prominent subtitle saying the smoothing parameters are not numerically comparable                   |
+| 4 and 14 | Colorbars have labeled ticks of approximately −150 to +150, while the actual relative-GCV datasets extend to roughly −283     | Show the complete color range or clearly identify any saturated color limits                              |
+| 5 and 10 | Absolute GCV values appear similar, but the locations of interior minima on the horizontal axis differ                        | Note that criterion scores are comparable in scale, while log-\\(\lambda\\) values differ by construction |
+| 7 and 12 | The coefficient trajectories represent different selection procedures                                                         | Explicitly label manual lowest evaluated candidate versus automatic `mgcv`                                |
+| 9        | The transition at 176 → 178 differs from Stage 3C                                                                             | Add an explanation of the near-tie at Easting 176                                                         |
+| 10       | The title says six-Easting pilot, but only four GCV panels are shown                                                          | Retitle as Four Selected Profiles from the Six-Easting Pilot                                              |
+| 17       | The two panels have different GCV vertical-axis scales                                                                        | Make the separate scales more apparent and show the numerical difference between the competing minima     |
+
+These changes would make it much easier to interpret the slides during a research meeting.
+
+## 7. What we can say after the audit
+
+Three findings stand out.
+
+First, the original Eastings 214, 216, and 218 align numerically with the full-field work. Their GCV profiles, candidate scores, and treatment coefficients are consistent within each corresponding model specification.
+
+Second, the manual and `mgcv` analyses are broadly consistent, but not identical. Their exact linear limits agree across all 199 Eastings, whereas the finite-smoothing results can differ. The near-tie at Easting 176 is the most consequential example.
+
+Third, the diagrams currently make it too easy to confuse absolute GCV, GCV relative to linear, and optimizer GCV gaps.
+
+My recommendation is to revise the presentation around a common set of definitions and highlight Eastings 80, 176, 214, 216, and 374 as explanatory examples.
+
+The research result at 176 is particularly important: it suggests that small differences in the GCV criterion can change the preferred smoothing regime, with potentially substantial consequences for an unpenalized coefficient.
+
+That is precisely the kind of phenomenon our later stationary-point and coefficient-sensitivity investigations should examine.

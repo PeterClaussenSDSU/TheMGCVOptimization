@@ -1,0 +1,21 @@
+\begin{longtable}{@{}p{2.2cm}p{6.2cm}p{6.4cm}@{}}
+\caption{Anomaly taxonomy. Source: \texttt{GCV\_Stage3C\_Anomaly\_Taxonomy\_All\_Eastings.csv; Stage3C\_Auto\_vs\_Grid.csv}.}\label{tab:anomaly-taxonomy}\\
+\toprule
+Code & Rule & Meaning\\
+\midrule
+\endfirsthead
+\toprule
+Code & Rule & Meaning\\
+\midrule
+\endhead
+M0--M3 & 0, 1, 2, or 3 interior minima & Number of detected candidate minima\\
+A & At least 2 interior minima & Multiple-minimum profile\\
+B & Automatic minus grid GCV > 0.0001 & Inferior automatic solution\\
+C & Automatic minus linear GCV > 0.0001 & Inferior to linear alternative\\
+D & Best interior GCV minus linear GCV > 0.0001 & Linear preferred\\
+E & Best interior GCV minus linear GCV < -0.0001 & Interior preferred\\
+F & Absolute Product B difference >= 0.25 & Provisional coefficient-sensitivity flag\\
+G & Minima GCV spread >= 5 & Provisional widely-spaced score flag\\
+H & Grid best at right edge & Strongly penalized candidate\\
+\bottomrule
+\end{longtable}

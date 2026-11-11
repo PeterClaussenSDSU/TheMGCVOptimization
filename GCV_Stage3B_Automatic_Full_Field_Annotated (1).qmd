@@ -1,0 +1,443 @@
+---
+title: "Full-Field GCV Research — Stage 3B (Annotated Automatic Fits)"
+subtitle: "199 automatic mgcv GAMs; selected-SP verification and exact linear-limit screening"
+format:
+  html:
+    toc: true
+    number-sections: true
+    code-fold: false
+execute:
+  echo: true
+  warning: true
+  message: true
+---
+
+# Stage 3A pilot: verified results and what Stage 3B tests
+
+**Research status at 14 October 2026.** The Stage 3A pilot used `mgcv` 1.9.4, R 4.6.1 and six Eastings (212, 214, 216, 218, 232, 234). The same GAM specification was used for automatic fitting and the 600-point fixed-SP grid (`log(sp)` from -12 to 25). The 3,600 grid fits and all six automatic fits completed, and the historical 214/216/218 benchmark passed at approximately machine precision.
+
+| Easting | GCV(auto) - GCV(best grid) | Beta(auto) - Beta(best grid) | Meaning |
+|:--|--:|--:|:--|
+| 212 | -0.001931 | +0.003045 | Automatic closely agrees with interior grid minimum |
+| 214 | +4.975048 | -0.358484 | Automatic has inferior GCV to near-linear grid candidate |
+| 216 | +15.115739 | -0.418170 | Automatic has inferior GCV to near-linear grid candidate |
+| 218 | -0.000000019 | effectively zero | Automatic near exact linear limit |
+| 232 | -0.000000014 | effectively zero | Automatic near exact linear limit, despite a higher interior dip |
+| 234 | -0.0000763 | -0.002254 | Automatic closely agrees with interior grid minimum |
+
+**Scientific interpretation.** At 232, the near-linear regime beats the detected interior grid minimum; at 234, the interior solution wins. The optimizer follows the preferred regime at both locations. By contrast, at 214 and 216, the optimizer stops at an interior minimum although the near-linear candidate has lower GCV. These are distinct phenomena. A small negative grid gap is expected when the automatic solution is between grid points or at a larger `sp` than the grid explores.
+
+**Stage 3B is intentionally smaller than a complete fixed-grid sweep.** It fits 199 automatic GAM models, confirms the selected-SP refits, reproduces all six pilot fits, and calculates a closed-form exact linear-limit reference at all Eastings. Stage 3C will compare every automatic result against a sufficiently broad fixed grid to study nonglobal selection beyond the linear limit.
+
+**Package requirements:** Base R + the external package `mgcv` (install once with `install.packages("mgcv")`). No other package is loaded. Code is explicit; no user-defined functions or `apply()` family are used for the statistical computations (the bookkeeping uses `vapply` to identify missing results).
+
+**Provenance and scope:** All numbers in the pilot table are from the uploaded Stage 3A files. The code below has not yet been run against your full data in this document; results from new Eastings are *unknown until executed*. Do not conflate the manually constructed spline penalty (Stage 2) with `mgcv`'s different B-spline representation or compare their numeric smoothing parameter values directly.
+
+## Research design and mathematics
+
+For Easting $e$, the model is
+
+$$Y_{i,e}=\beta_{0,e}+\beta_{B,e}I(\text{Product}_i=B)+f_e(N_i)+\epsilon_{i,e}.$$
+
+The automatic GCV score is
+
+$$GCV_e(\lambda)=\frac{24\sum_{i=1}^{24}(Y_{i,e}-\widehat Y_{i,e,\lambda})^2}{[24-\operatorname{tr}(H_{e,\lambda})]^2}.$$
+
+The exact *linear-limit reference* is obtained by $\lambda\to\infty$, leaving the unpenalized linear Northing component. Its fit has $\mathrm{EDF}=3$, including intercept, Product and Northing. Define
+
+$$D_{\mathrm{lin},e}=GCV_e(\widetilde\lambda_e)-GCV_{e,\infty}.$$
+
+If $D_{\mathrm{lin},e}>0$ beyond numerical tolerance, the automatic fit scores worse than a known simpler limiting fit. **If $D_{\mathrm{lin},e}\le 0$, it does not show that the automatic fit is globally optimal.** Stage 3C will compute the broader optimizer gap
+
+$$D_{\mathrm{opt},e}=GCV_e(\widetilde\lambda_e)-\min_{\lambda\in\mathcal G}GCV_e(\lambda).$$
+
+Even a tiny negative $D_{\mathrm{opt},e}$ is possible because the discrete grid omits the optimizer's exact smoothing parameter. The quality of the global search must be evaluated before describing a global optimum.
+
+---
+
+## 1. Paths, model specification, and scope
+
+This code verifies that the full-field data, the validated Stage 2 manual summary, and the saved Stage 3A six-Easting pilot results exist. `mgcv` is the only external analysis package; install it once with `install.packages("mgcv")` if necessary. The program creates a **new** output folder and does not alter prior-stage results. The primary quantity here is the **automatically selected** smoothing parameter, not the best parameter from a fixed grid.
+
+**Expected result (not a claimed computation):** R prints its version and the current `mgcv` version. The program announces 199 automatic GAM fits and 199 exact-selected-SP refits. It does **not** run a 600-point search at this stage.
+
+```{r stage3b-1}
+# STAGE 3B - original mgcv B-spline, 199 automatic fits.
+# External analysis package: mgcv. Everything else is Base R.
+# Install once if necessary: install.packages("mgcv")
+if (!requireNamespace("mgcv", quietly = TRUE)) {
+  stop("Install mgcv once using install.packages('mgcv')")
+}
+library(mgcv)
+
+data_dir <- "C:/Users/pbbs/Claussen"
+full_file <- file.path(data_dir, "Example1SmoothHarvestPasses.csv")
+manual_file <- file.path(data_dir, "GCV_Full_Field_Project",
+                         "02_Manual_Full_Field", "Manual_Full_Field_Summary.csv")
+pilot_file <- file.path(data_dir, "GCV_Full_Field_Project",
+                        "03A_MGCV_Pilot", "Stage3A_Automatic_Selections.csv")
+out_dir <- file.path(data_dir, "GCV_Full_Field_Project", "03B_MGCV_Automatic_Full_Field")
+
+stopifnot(all(file.exists(c(full_file, manual_file, pilot_file))))
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+eastings <- seq(2, 398, by = 2)
+reference_eastings <- c(212, 214, 216, 218, 232, 234)
+refit_tol <- 1e-6
+pilot_tol <- 1e-5
+linear_tol <- 1e-4
+cat("STAGE 3B: 199 automatic fits and 199 selected-SP refits.\n")
+cat("R version:", R.version.string, "\n")
+cat("mgcv version:", as.character(packageVersion("mgcv")), "\n")
+```
+
+
+## 2. Read the complete field and verify the common experimental design
+
+The full workbook is reshaped into an ordered list of 199 data frames, each containing exactly 24 passes. The code enforces consistent `PassNo`, `Northing`, `Product`, `Pair`, and `Pass`, then converts Product to a factor with E as the reference. Consequently `ProductB` is the B-minus-E coefficient. Each Easting gets its *own* response vector but an identical design. A validation failure stops execution before fitting any model.
+
+**Expected result (not a claimed computation):** It reports a verified common design for all 199 Eastings. There should be no missing observations or duplicate Easting-pass combinations.
+
+```{r stage3b-2}
+full <- read.csv(full_file, stringsAsFactors = FALSE, check.names = TRUE)
+required <- c("Yield", "Easting", "PassNo", "Pair", "Product", "Northing", "Pass")
+stopifnot(all(required %in% names(full)), nrow(full) == 4776)
+for (v in c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")) {
+  full[[v]] <- suppressWarnings(as.numeric(as.character(full[[v]])))
+}
+full$Product <- trimws(as.character(full$Product))
+stopifnot(all(is.finite(as.matrix(full[, c("Yield", "Easting", "PassNo",
+                                            "Pair", "Northing", "Pass")]))))
+stopifnot(all(full$Product %in% c("B", "E")))
+stopifnot(!anyDuplicated(paste(full$Easting, full$PassNo, sep = "_")))
+stopifnot(identical(sort(unique(full$Easting)), as.numeric(eastings)))
+
+slices <- vector("list", length(eastings))
+for (j in seq_along(eastings)) {
+  z <- full[full$Easting == eastings[j], , drop = FALSE]
+  z <- z[order(z$PassNo), , drop = FALSE]
+  stopifnot(nrow(z) == 24, identical(as.numeric(z$PassNo), as.numeric(1:24)))
+  z$Product <- factor(z$Product, levels = c("E", "B"))
+  stopifnot(!anyNA(z$Product), sum(z$Product == "B") == 12)
+  slices[[j]] <- z
+}
+
+zref <- slices[[1]]
+for (j in seq_along(eastings)) {
+  z <- slices[[j]]
+  stopifnot(identical(z$Northing, zref$Northing),
+            identical(as.character(z$Product), as.character(zref$Product)),
+            identical(z$Pair, zref$Pair), identical(z$Pass, zref$Pass))
+}
+cat("COMMON DESIGN: PASS (199 Eastings, 24 passes, 12 B and 12 E each).\n")
+```
+
+
+## 3. Fit automatic GCV GAMs and refit at the selected smoothing parameter
+
+For each Easting, the automatic fit omits `sp`. The fixed refit then supplies exactly the selected `sp`. The score is computed explicitly as $24 RSS/(24-EDF)^2$, where total EDF includes the intercept and Product term. Output also records the unpenalized `ProductB`, the smooth EDF, and a convergence indicator. The program saves partial progress every 20 Eastings and records errors rather than silently skipping observations. A successful refit checks *fitting-mode consistency*, not global optimality.
+
+**Expected result (not a claimed computation):** 199 rows with finite GCV scores, valid positive smoothing parameters, reported convergence, and selected-SP refit differences near zero. The historical 214 and 216 automatic scores should resemble 158.4734 and 171.4501; 218 should be near 160.2294. No **new** experimental outcome is assumed for other locations.
+
+```{r stage3b-3}
+auto_rows <- vector("list", length(eastings))
+failures <- data.frame(Easting = numeric(0), Stage = character(0),
+                       Detail = character(0), stringsAsFactors = FALSE)
+
+for (j in seq_along(eastings)) {
+  e <- eastings[j]
+  z <- slices[[j]]
+  fit <- try(mgcv::gam(
+    Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+    data = z, family = gaussian(), method = "GCV.Cp"
+  ), silent = TRUE)
+
+  if (inherits(fit, "try-error")) {
+    failures <- rbind(failures, data.frame(Easting = e, Stage = "automatic fit",
+      Detail = substr(as.character(fit)[1], 1, 300)))
+    next
+  }
+
+  selected_sp <- as.numeric(fit$sp[1])
+  if (length(selected_sp) != 1L || !is.finite(selected_sp) || selected_sp <= 0) {
+    failures <- rbind(failures, data.frame(Easting = e, Stage = "selected SP",
+      Detail = "Missing, non-finite, or non-positive smoothing parameter"))
+    next
+  }
+
+  total_edf <- sum(fit$edf)
+  rss_auto <- sum(residuals(fit)^2)
+  auto_gcv <- nrow(z) * rss_auto / (nrow(z) - total_edf)^2
+  auto_beta <- unname(as.numeric(coef(fit)["ProductB"]))
+
+  fixed <- try(mgcv::gam(
+    Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+    data = z, family = gaussian(), method = "GCV.Cp", sp = selected_sp
+  ), silent = TRUE)
+
+  if (inherits(fixed, "try-error")) {
+    failures <- rbind(failures, data.frame(Easting = e, Stage = "selected-SP refit",
+      Detail = substr(as.character(fixed)[1], 1, 300)))
+    next
+  }
+
+  fixed_edf <- sum(fixed$edf)
+  fixed_gcv <- nrow(z) * sum(residuals(fixed)^2) / (nrow(z) - fixed_edf)^2
+  fixed_beta <- unname(as.numeric(coef(fixed)["ProductB"]))
+
+  auto_rows[[j]] <- data.frame(
+    Easting = e, Lambda = selected_sp, LogLambda = log(selected_sp),
+    GCV = auto_gcv, Smooth_EDF = total_edf - 2,
+    Total_EDF = total_edf, RSS = rss_auto,
+    Product_B = auto_beta, Converged = isTRUE(fit$converged),
+    Selected_SP_Refit_GCV_Diff = abs(auto_gcv - fixed_gcv),
+    Selected_SP_Refit_Beta_Diff = abs(auto_beta - fixed_beta),
+    Selected_SP_Refit_EDF_Diff = abs(total_edf - fixed_edf),
+    stringsAsFactors = FALSE
+  )
+
+  if (j %% 20L == 0L || j == length(eastings)) {
+    completed <- auto_rows[!vapply(auto_rows, is.null, logical(1))]
+    if (length(completed) > 0) {
+      write.csv(do.call(rbind, completed),
+                file.path(out_dir, "Stage3B_IN_PROGRESS.csv"), row.names = FALSE)
+    }
+    cat("Completed", j, "of", length(eastings), "Eastings; errors:",
+        nrow(failures), "\n")
+  }
+}
+
+write.csv(failures, file.path(out_dir, "Stage3B_Fit_Errors.csv"), row.names = FALSE)
+if (any(vapply(auto_rows, is.null, logical(1)))) {
+  stop("At least one Easting has no complete fit; inspect Stage3B_Fit_Errors.csv")
+}
+automatic <- do.call(rbind, auto_rows)
+row.names(automatic) <- NULL
+stopifnot(nrow(automatic) == length(eastings),
+          identical(as.numeric(automatic$Easting), as.numeric(eastings)),
+          all(is.finite(as.matrix(automatic[, c("GCV", "Product_B", "Lambda", "Smooth_EDF")]))))
+
+refit_pass <- all(automatic$Selected_SP_Refit_GCV_Diff < refit_tol) &&
+              all(automatic$Selected_SP_Refit_Beta_Diff < refit_tol) &&
+              all(automatic$Selected_SP_Refit_EDF_Diff < refit_tol)
+convergence_pass <- all(automatic$Converged)
+cat("All selected-SP refits agree:", refit_pass, "\n")
+cat("All automatic fits report convergence:", convergence_pass, "\n")
+```
+
+
+## 4. Independently reconcile all six Stage 3A pilot locations
+
+A full-field run must reproduce *every one* of the six saved pilot automatic fits, not just the original three historical Eastings. We compare the exact recorded GCV, Product B coefficient, smooth EDF, and log smoothing parameter with the Stage 3A outputs. The tight but nonzero tolerances permit harmless floating-point differences. Any failure prevents acceptance.
+
+**Expected result (not a claimed computation):** Six benchmark rows, with every `PASS` value equal to `TRUE`. This also verifies the reproducibility of 232 and 234, where Stage 3A found a preference change without a sizable optimizer gap.
+
+```{r stage3b-4}
+pilot <- read.csv(pilot_file, stringsAsFactors = FALSE)
+stopifnot(nrow(pilot) == 6, all(reference_eastings %in% pilot$Easting))
+benchmark <- data.frame()
+for (e in reference_eastings) {
+  current <- automatic[automatic$Easting == e, , drop = FALSE]
+  old <- pilot[pilot$Easting == e, , drop = FALSE]
+  stopifnot(nrow(current) == 1, nrow(old) == 1)
+  d_gcv <- abs(current$GCV - old$GCV)
+  d_beta <- abs(current$Product_B - old$Product_B)
+  d_edf <- abs(current$Smooth_EDF - old$Smooth_EDF)
+  d_logsp <- abs(current$LogLambda - old$LogLambda)
+  okay <- all(is.finite(c(d_gcv, d_beta, d_edf, d_logsp))) &&
+    all(c(d_gcv, d_beta, d_edf, d_logsp) < pilot_tol)
+  benchmark <- rbind(benchmark, data.frame(
+    Easting = e, GCV_Abs_Diff = d_gcv, Product_B_Abs_Diff = d_beta,
+    Smooth_EDF_Abs_Diff = d_edf, LogSP_Abs_Diff = d_logsp,
+    PASS = okay
+  ))
+}
+print(benchmark, row.names = FALSE, digits = 10)
+cat("Stage 3A six-Easting reproduction:", all(benchmark$PASS), "\n")
+```
+
+
+## 5. Compute an exact linear-limit reference
+
+The exact $\lambda\to\infty$ limit is an ordinary least-squares model with an intercept, the treatment indicator, and a *linear* Northing term, because the cubic curvature penalty has a linear nullspace. We refit this 3-column OLS model at all 199 Eastings using Base R. Unlike a 600-point grid, it gives a known reference candidate for every location. Its GCV uses total EDF = 3. We compare these values to the Stage 2 manual exact limit, which must agree despite different spline bases.
+
+**Expected result (not a claimed computation):** 199 exact linear-limit GCV values and Product coefficients. Absolute differences against the independently calculated Stage 2 linear reference should be below `linear_tol`.
+
+```{r stage3b-5}
+manual <- read.csv(manual_file, stringsAsFactors = FALSE)
+manual <- manual[match(eastings, manual$Easting), , drop = FALSE]
+stopifnot(nrow(manual) == length(eastings), !anyNA(manual$Easting))
+
+x <- slices[[1]]$Northing
+P <- as.numeric(slices[[1]]$Product == "B")
+Xlin <- cbind(Intercept = 1, Product_B = P, Northing_linear = x - mean(x))
+stopifnot(qr(Xlin)$rank == 3)
+
+linear <- data.frame(Easting = eastings, Linear_GCV = NA_real_,
+                     Linear_Product_B = NA_real_, Linear_RSS = NA_real_)
+for (j in seq_along(eastings)) {
+  yy <- slices[[j]]$Yield
+  coef_lin <- qr.solve(Xlin, yy)
+  r_lin <- as.vector(yy - Xlin %*% coef_lin)
+  linear$Linear_RSS[j] <- sum(r_lin^2)
+  linear$Linear_GCV[j] <- 24 * linear$Linear_RSS[j] / (24 - 3)^2
+  linear$Linear_Product_B[j] <- coef_lin[2]
+}
+linear$Manual_Linear_GCV_Diff <- abs(linear$Linear_GCV - manual$GCV_Linear_Limit)
+linear$Manual_Linear_Beta_Diff <- abs(linear$Linear_Product_B - manual$Product_B_Linear_Limit)
+linear_pass <- all(linear$Manual_Linear_GCV_Diff < linear_tol) &&
+               all(linear$Manual_Linear_Beta_Diff < linear_tol)
+cat("Independent linear-limit agreement with Stage 2:", linear_pass, "\n")
+cat("Largest linear GCV discrepancy:", max(linear$Manual_Linear_GCV_Diff), "\n")
+cat("Largest linear beta discrepancy:", max(linear$Manual_Linear_Beta_Diff), "\n")
+```
+
+
+## 6. Construct descriptive screening diagnostics (not a global search)
+
+The quantity $D_{\mathrm{lin}}(e)=GCV_e(\widetilde\lambda_e)-GCV_{e,\infty}$ compares the automatic solution with a **known feasible limiting alternative**. If positive beyond numerical tolerance, the automatic solution is worse than a model approached by arbitrarily strong smoothing, regardless of whether any other interior candidate is better. If nonpositive, it does **not** imply a global minimum: another interior basin could still beat the automatic solution. We also record changes in coefficients, EDF, and log-SP between adjacent Eastings and compare with manual candidates. These changes are descriptive and no inferential significance threshold is established here.
+
+**Expected result (not a claimed computation):** A 199-row screening table. We expect the historical 214 and 216 sites to be flagged as worse than the exact linear candidate. We do not know the count of additional flagged Eastings until your code runs.
+
+```{r stage3b-6}
+screen <- merge(automatic, linear, by = "Easting", sort = TRUE)
+screen <- screen[match(eastings, screen$Easting), , drop = FALSE]
+stopifnot(nrow(screen) == length(eastings), !anyNA(screen$Easting))
+
+screen$Auto_Minus_Linear_GCV <- screen$GCV - screen$Linear_GCV
+screen$Auto_Minus_Linear_Beta <- screen$Product_B - screen$Linear_Product_B
+screen$Worse_Than_Linear <- screen$Auto_Minus_Linear_GCV > 1e-4
+screen$Near_Linear_Auto <- abs(screen$Smooth_EDF - 1) < 0.01
+screen$Adjacent_Auto_Beta_Change <- c(NA_real_, diff(screen$Product_B))
+screen$Adjacent_LogSP_Change <- c(NA_real_, diff(screen$LogLambda))
+screen$Adjacent_Auto_EDF_Change <- c(NA_real_, diff(screen$Smooth_EDF))
+screen$Auto_Near_Linear_Switch <- c(NA, diff(as.integer(screen$Near_Linear_Auto)) != 0)
+
+screen$Manual_Lowest_Candidate <- manual$Lowest_Candidate
+screen$Manual_Lowest_Beta <- manual$Lowest_Candidate_Product_B
+screen$Manual_Interior_Dip_Count <- manual$Interior_Dip_Count
+screen$Auto_Minus_Manual_Best_Beta <- screen$Product_B - screen$Manual_Lowest_Beta
+
+cat("Eastings with automatic GCV > exact linear GCV by more than 1e-4:",
+    sum(screen$Worse_Than_Linear), "\n")
+cat("Eastings with automatic smooth EDF within 0.01 of one:",
+    sum(screen$Near_Linear_Auto), "\n")
+cat("Largest abs adjacent auto Product-B change:",
+    max(abs(screen$Adjacent_Auto_Beta_Change), na.rm = TRUE), "\n")
+print(screen[screen$Easting %in% reference_eastings,
+             c("Easting", "GCV", "Linear_GCV", "Auto_Minus_Linear_GCV",
+               "Product_B", "Linear_Product_B", "Near_Linear_Auto",
+               "Worse_Than_Linear")], row.names = FALSE, digits = 9)
+```
+
+
+## 7. Formal acceptance gate and permanent tables
+
+No full-field automatic results are accepted unless the program has all 199 fits, all selected-SP refit identities, all convergence flags, all six pilot reproduction checks, and 199 exact linear-limit reconciliations. We preserve an error log and, if validation fails, store diagnostic failed-check tables. The successful tables are written to a new Stage 3B directory. These *do not* contain a full-field optimizer gap against the best fixed-grid candidate; that requires Stage 3C.
+
+**Expected result (not a claimed computation):** `STAGE 3B ACCEPTANCE: PASS` appears only if all checks succeed. Files include an automatic-selection table, linear-limit checks, pilot benchmarks, and a 199-row screening diagnostic.
+
+```{r stage3b-7}
+acceptance <- data.frame(
+  Check = c("199 complete fits", "All selected-SP refits", "All converged",
+            "Six pilot benchmarks", "Linear-limit reconciliation", "No fit errors"),
+  PASS = c(nrow(automatic) == 199, refit_pass, convergence_pass,
+           all(benchmark$PASS), linear_pass, nrow(failures) == 0),
+  stringsAsFactors = FALSE
+)
+print(acceptance, row.names = FALSE)
+write.csv(acceptance, file.path(out_dir, "Stage3B_Validation_Gate.csv"), row.names = FALSE)
+write.csv(benchmark, file.path(out_dir, "Stage3B_Pilot_Benchmark.csv"), row.names = FALSE)
+write.csv(linear, file.path(out_dir, "Stage3B_Linear_Limit_Check.csv"), row.names = FALSE)
+if (!all(acceptance$PASS)) {
+  write.csv(automatic, file.path(out_dir, "FAILED_Stage3B_Automatic.csv"), row.names = FALSE)
+  stop("Stage 3B validation FAILED. Inspect validation gate and diagnostics before proceeding.")
+}
+write.csv(automatic, file.path(out_dir, "Stage3B_Automatic_Selections.csv"), row.names = FALSE)
+write.csv(screen, file.path(out_dir, "Stage3B_Linear_Screen_and_Trajectories.csv"), row.names = FALSE)
+cat("STAGE 3B ACCEPTANCE: PASS\n")
+```
+
+
+## 8. Create the reproducible graphics and software provenance
+
+A multi-page PDF displays the Product coefficient trajectory, automatic log-SP, smooth EDF, automatic GCV relative to the linear-limit score, and the pilot sites marked on the full field. The horizontal zero reference in the GCV-gap plot has a direct meaning; it is **not** a best-grid optimizer gap. The provenance text records software versions and model settings. No simulated observations are used.
+
+**Expected result (not a claimed computation):** One diagnostic PDF and one provenance TXT file. Upload these alongside the two main output CSVs and pilot benchmark for interpretation.
+
+```{r stage3b-8}
+pdf(file.path(out_dir, "Stage3B_Automatic_Full_Field_Diagnostics.pdf"),
+    width = 11, height = 8.5, onefile = TRUE)
+par(mfrow = c(1, 1), mar = c(5, 5, 3, 2))
+plot(screen$Easting, screen$Product_B, type = "l", lwd = 2,
+     col = "firebrick", xlab = "Easting", ylab = "Product B coefficient",
+     main = "Stage 3B: automatic mgcv coefficient vs linear limit")
+lines(screen$Easting, screen$Linear_Product_B,
+      lwd = 1.8, lty = 2, col = "steelblue")
+legend("topright", c("Automatic mgcv", "Exact linear limit"),
+       col = c("firebrick", "steelblue"), lty = c(1, 2), lwd = 2, bty = "n")
+
+par(mfrow = c(2, 1), mar = c(4, 5, 3, 2))
+plot(screen$Easting, screen$LogLambda, type = "l", lwd = 1.6,
+     xlab = "Easting", ylab = "Automatic log(sp)",
+     main = "Automatic smoothing parameters across field")
+abline(v = reference_eastings, col = "gray70", lty = 3)
+plot(screen$Easting, screen$Smooth_EDF, type = "l", lwd = 1.6,
+     xlab = "Easting", ylab = "Smooth EDF",
+     main = "Automatic smooth complexity; 1 is the linear limit")
+abline(h = 1, lty = 2, col = "gray50")
+
+par(mfrow = c(1, 1), mar = c(5, 5, 3, 2))
+plot(screen$Easting, screen$Auto_Minus_Linear_GCV, type = "l", lwd = 1.5,
+     xlab = "Easting", ylab = "GCV(auto) - GCV(exact linear)",
+     main = "Known-alternative screen (NOT a best-grid optimizer gap)")
+abline(h = 0, lty = 2, col = "gray40")
+points(screen$Easting[screen$Worse_Than_Linear],
+       screen$Auto_Minus_Linear_GCV[screen$Worse_Than_Linear],
+       pch = 19, col = "firebrick", cex = 0.65)
+
+plot(screen$Easting, screen$Adjacent_Auto_Beta_Change, type = "h",
+     xlab = "Easting of later observation", ylab = "Adjacent beta change",
+     main = "Adjacent-Easting changes in automatic Product B coefficient")
+abline(h = 0, lty = 2, col = "gray40")
+
+dev.off()
+writeLines(c(
+  paste("Run timestamp:", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
+  paste("R version:", R.version.string),
+  paste("mgcv version:", as.character(packageVersion("mgcv"))),
+  paste("Input:", full_file),
+  "Eastings: 2,4,...,398; 24 passes per Easting",
+  "Formula: Yield ~ Product + s(Northing, bs='bs', k=10, m=c(3,2))",
+  "Family: gaussian; smoothing method: GCV.Cp",
+  "Stage 3B: automatic GAM fits and exact-selected-sp refits ONLY",
+  "Comparison: exact linear-limit OLS; no full 600-point grid in Stage 3B",
+  "Data may have been smoothed in an earlier processing stage; not yet established",
+  "Acceptance gate: PASS"
+), file.path(out_dir, "Stage3B_Provenance.txt"))
+cat("Stage 3B files saved to:", out_dir, "\n")
+cat("NEXT RESEARCH STAGE: 3C, fixed 600-point sp grid across field.\n")
+```
+
+
+
+# Reading the results and deciding whether to advance
+
+After execution, the program writes these files inside `C:/Users/pbbs/Claussen/GCV_Full_Field_Project/03B_MGCV_Automatic_Full_Field`:
+
+| Output | Rows/format | Meaning |
+|:--|:--|:--|
+| `Stage3B_Automatic_Selections.csv` | 199 rows | Selected SP, automatic GCV, EDF, coefficient, convergence, selected-SP refit differences |
+| `Stage3B_Linear_Limit_Check.csv` | 199 rows | Exact OLS linear-limit GCV/coefficient and agreement with Stage 2 |
+| `Stage3B_Linear_Screen_and_Trajectories.csv` | 199 rows | GCV(auto) minus GCV(linear), coefficient changes and comparison to Stage 2 |
+| `Stage3B_Pilot_Benchmark.csv` | 6 rows | Numerical matching against all six Stage 3A automatic pilot runs |
+| `Stage3B_Validation_Gate.csv` | 6 rows | Required acceptance conditions |
+| `Stage3B_Automatic_Full_Field_Diagnostics.pdf` | Multipage | Plots of coefficient, smoothing, complexity and simple-model screening |
+| `Stage3B_Provenance.txt` | Text | Versions, specification, run time and validation status |
+| `Stage3B_Fit_Errors.csv` | 0 or more | Failures recorded rather than hidden |
+
+**Decision rule:** advance to Stage 3C only if `STAGE 3B ACCEPTANCE: PASS` appears. If not, upload the errors and validation gate; do not interpret the full-field automatic series as an accepted run.
+
+**Upload next:** automatic selections, linear-screen/trajectories CSV, pilot benchmark, validation gate, PDF, and console output. We will inspect the actual new results before designing the 600-point full-grid Stage 3C run with checkpoint/restart protection.
+
+**Still unresolved:** whether `Yield` represents original measurements or an earlier Easting-smoothed response. This distinction matters for inferential treatment of serial dependence across Eastings. All adjacent-Easting differences are descriptive, not significance tests.

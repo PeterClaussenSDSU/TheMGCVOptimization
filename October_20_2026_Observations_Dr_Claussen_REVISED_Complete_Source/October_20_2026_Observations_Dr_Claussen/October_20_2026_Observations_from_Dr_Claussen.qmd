@@ -1,0 +1,178 @@
+---
+title: "October 20, 2026 Observations from Dr. Claussen"
+subtitle: "Full-field GCV results, slide observations, and source-linked figures through Stage 3C"
+date: "2026-10-20"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    geometry: margin=0.9in
+    fontsize: 10pt
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Scope and research provenance
+
+This executable Quarto notebook works from **saved, previously completed Stage 1--3C CSV results**. It does **not** rerun the original 199 automatic GAM fits or the 119,400 fixed-parameter GAM fits. The script `generate_figures_tables.R` creates thirteen figures and eleven tables from the supplied CSV outputs. In the distribution ZIP, these data are located in `source_data/`. On the original Windows computer, the script alternatively reads the established stage-specific folders at `C:/Users/pbbs/Claussen/GCV_Full_Field_Project`.
+
+**Libraries:** The reproduction script uses **Base R only** (`read.csv`, `image`, `plot`, `barplot`, `pdf`, `png`). Quarto itself requires Quarto and its standard R Markdown rendering dependencies; `knitr` is used to display the generated tables. No `mgcv` installation is needed to remake *these* figures because it reads precomputed `mgcv` outputs. To rerun the original GAM models rather than plot their saved results, install `mgcv` and use the original Stage 3 scripts.
+
+```{r run-reproduction}
+# Base R functions used for graphics and CSV output; no library() calls.
+source("generate_figures_tables.R", local = FALSE)
+```
+
+# Definitions and interpretation
+
+At each Easting \(e\), the regression is
+
+\[
+Y_i(e)=\beta_0(e)+\beta_B(e)I(P_i=B)+f_e(N_i)+\varepsilon_i(e),
+\]
+
+and the generalized cross-validation criterion is
+
+\[
+\mathrm{GCV}_e(\lambda)=\frac{24\,\mathrm{RSS}_e(\lambda)}{[24-\mathrm{EDF}_e(\lambda)]^2}.
+\]
+
+For the `mgcv` specification with one smoothing parameter, `sp` is the R argument for \(\lambda_{\mathrm{mgcv}}\); hence \(\log(sp)=\log(\lambda_{\mathrm{mgcv}})\). **The manual spline and `mgcv` spline penalties have different parameterizations, so a numerical value of \(\log\lambda\) in one construction is not directly comparable to its value in the other.**
+
+Three distinct diagnostics are used:
+
+\[
+\begin{aligned}
+\mathrm{Absolute\ GCV}&=\mathrm{GCV}_e(\lambda),\\
+\mathrm{Relative\ GCV}&=\mathrm{GCV}_e(\lambda)-\mathrm{GCV}_{e,\infty},\\
+\Delta_{\mathrm{struct}}(e)&=\mathrm{GCV}_{e,\mathrm{best\ interior}}-\mathrm{GCV}_{e,\infty},\\
+\Delta_{\mathrm{opt}}(e)&=\mathrm{GCV}_{e,\mathrm{auto}}-\mathrm{GCV}_{e,\mathrm{best\ grid}},\\
+\Delta_\beta(e)&=\widehat\beta_{B,\mathrm{auto}}-\widehat\beta_{B,\mathrm{best\ grid}}.
+\end{aligned}
+\]
+
+For the same Easting, subtracting the linear-limit constant changes vertical position but not the stationary points as a function of \(\log\lambda\).
+
+# Stage 1--3C: outputs and key summaries
+
+```{r table-stages}
+knitr::kable(read.csv("generated_figures_tables/T01_stage_summary.csv"),
+ caption="Stage summary. Sources: Stage1B_Summary.csv; Manual_Full_Field_Summary.csv; Stage3A_Auto_vs_Grid.csv; Stage3B_Linear_Screen_and_Trajectories.csv; Stage3C_Auto_vs_Grid.csv.")
+```
+
+```{r table-original}
+knitr::kable(read.csv("generated_figures_tables/T03_original_slice_comparison.csv"),digits=3,
+ caption="Easting 214, 216, 218 comparison. Sources: Manual_Full_Field_Summary.csv and Stage3C_Auto_vs_Grid.csv. Missing manual interior candidate is not a zero GCV.")
+```
+
+# Manual Stage 2 GCV geometry: slides 4--9
+
+![](generated_figures_tables/F01_manual_absolute_relative_heatmaps.png){fig-alt="Manual absolute and relative GCV heatmaps"}
+
+*Figure 1. Absolute manual GCV and manual GCV minus exact linear-limit GCV for the 199 Eastings and 400 log smoothing parameters. Source: `Manual_Full_Field_Grid.csv`, joined to `Manual_Full_Field_Summary.csv` by Easting. These are not the automatic `mgcv` results.*
+
+![](generated_figures_tables/F08_manual_structural_gap.png){fig-alt="Manual structural GCV gap"}
+
+*Figure 2. Difference between the lowest detected manual interior GCV and the exact linear-limit GCV. Negative favors the interior candidate, positive favors the linear limit; missing values mean no qualifying interior minimum. Source: `Manual_Full_Field_Summary.csv`.*
+
+```{r table-minima-count}
+knitr::kable(read.csv("generated_figures_tables/T08_minimum_counts.csv"),
+ caption="Number of detected interior minima under each basis. Sources: Manual_Full_Field_Summary.csv and Stage3C_Auto_vs_Grid.csv.")
+```
+
+![](generated_figures_tables/F09_detected_minima_histogram.png){fig-alt="Numbers of detected interior minima"}
+
+*Figure 3. The manual implementation detects multiple interior minima at 27 Eastings; the package implementation does so at 28 Eastings. Source: `Manual_Full_Field_Summary.csv` and `Stage3C_Auto_vs_Grid.csv`.*
+
+![](generated_figures_tables/F10_regime_preference_map.png){fig-alt="Preferred smoothing regime across the field"}
+
+*Figure 4. Candidate regime preference by Easting for each construction. Near Easting 176, the preferred candidate differs between implementations because of a close GCV comparison. Source: `Manual_Full_Field_Summary.csv` and `Stage3C_Auto_vs_Grid.csv`.*
+
+# Automatic `mgcv` results: slides 10--17
+
+```{r table-pilot}
+knitr::kable(read.csv("generated_figures_tables/T02_six_Easting_pilot.csv"),digits=4,
+ caption="Six-Easting automatic-versus-grid pilot. Source: Stage3A_Auto_vs_Grid.csv.")
+```
+
+![](generated_figures_tables/F02_mgcv_absolute_relative_heatmaps.png){fig-alt="mgcv absolute and relative heatmaps"}
+
+*Figure 5. Package-based absolute GCV and GCV minus the exact linear-limit score. Source: `Stage3C_Full_Grid.csv` and `Stage3C_Auto_vs_Grid.csv`. The log smoothing parameter is `log(lambda_mgcv)` (called `log(sp)` in the original slide).* 
+
+![](generated_figures_tables/F03_four_mgcv_GCV_profiles.png){fig-alt="Four selected mgcv GCV profiles"}
+
+*Figure 6. Four full GCV profiles: Eastings 214, 216, 218, 374, with the automatic fit, lowest evaluated fixed-grid candidate, and exact linear-limit score. Source: `Stage3C_Full_Grid.csv` and `Stage3C_Auto_vs_Grid.csv`.*
+
+![](generated_figures_tables/F06_product_coefficient_trajectories.png){fig-alt="Product coefficient trajectories for both spline constructions"}
+
+*Figure 7. Estimated Product B effects by Easting. Manual lowest-candidate and linear-limit trajectories above; package automatic, grid, and linear-limit trajectories below. Source: `Manual_Full_Field_Summary.csv` and `Stage3C_Auto_vs_Grid.csv`. Different finite-parameter spline constructions need not yield identical trajectories.*
+
+![](generated_figures_tables/F07_optimizer_gaps_vs_coefficient_sensitivity.png){fig-alt="GCV optimizer gap and Product coefficient sensitivity"}
+
+*Figure 8. Optimization score gaps and their estimated Product B consequences. Source: `Stage3C_Auto_vs_Grid.csv`; an apparent GCV improvement need not imply a correspondingly large coefficient difference.*
+
+```{r table-sixteen}
+knitr::kable(read.csv("generated_figures_tables/T04_sixteen_inferior_automatic.csv"),digits=3,
+ caption="All 16 automatic selections whose GCV scores exceed an evaluated fixed-grid alternative by more than 0.0001. Source: Stage3C_Auto_vs_Grid.csv.")
+```
+
+![](generated_figures_tables/F11_sixteen_inferior_automatic_selections.png){fig-alt="Sixteen automatic selection gaps"}
+
+*Figure 9. The sixteen inferior automatic selections and the corresponding coefficient differences. Source: `Stage3C_Auto_vs_Grid.csv`.*
+
+# Special cases: Eastings 176 and 374
+
+```{r table-176}
+knitr::kable(read.csv("generated_figures_tables/T09_Easting176_contrast.csv"),digits=4,
+ caption="Easting 176 near-tie under different spline constructions. Sources: Manual_Full_Field_Summary.csv and Stage3C_Auto_vs_Grid.csv.")
+```
+
+![](generated_figures_tables/F12_easting_176_basis_sensitivity.png){fig-alt="Easting 176 basis sensitivity"}
+
+*Figure 10. The interior and linear-limit scores are close at Easting 176, yet the preferred candidate changes between the two spline constructions. Source: `Manual_Full_Field_Summary.csv` and `Stage3C_Auto_vs_Grid.csv`.*
+
+```{r table-374}
+knitr::kable(read.csv("generated_figures_tables/T07_Easting374_minima.csv"),digits=4,
+ caption="Two interior local minimum candidates at Easting 374 plus the automatic selection (last row). Sources: Stage3C_Interior_Grid_Dips.csv and Stage3C_Auto_vs_Grid.csv.")
+```
+
+![](generated_figures_tables/F04_Easting_374_two_minima.png){fig-alt="Easting 374 two competing GCV minima"}
+
+*Figure 11. The automatic smoother stops near a higher-scoring local minimum, while a smaller finite smoothing parameter scores lower. Source: `Stage3C_Full_Grid.csv`, `Stage3C_Interior_Grid_Dips.csv`, `Stage3C_Auto_vs_Grid.csv`.*
+
+![](generated_figures_tables/F05_Easting_374_GCV_RSS_EDF.png){fig-alt="Easting 374 GCV, residual sum of squares, and EDF"}
+
+*Figure 12. As log smoothing increases, RSS tends to increase while smooth EDF falls. In the strongly penalized part of this specific profile, the RSS deterioration dominates the complexity reduction, causing GCV to increase. Source: `Stage3C_Full_Grid.csv` and `Stage3C_Auto_vs_Grid.csv`.*
+
+```{r table-contrast}
+knitr::kable(read.csv("generated_figures_tables/T06_sensitivity_contrasts.csv"),digits=3,
+ caption="GCV-criterion and coefficient effects contrasted at Eastings 174 and 374. Source: Stage3C_Auto_vs_Grid.csv.")
+```
+
+# Multiple-minimum anomaly taxonomy
+
+```{r table-multiple}
+knitr::kable(read.csv("generated_figures_tables/T05_twenty_eight_multi_minima.csv"),digits=3,
+ caption="All 28 Eastings with two or more grid-detected interior GCV minima. Sources: Stage3C_Auto_vs_Grid.csv and Stage3C_Interior_Grid_Dips.csv.")
+```
+
+![](generated_figures_tables/F13_taxonomy_counts.png){fig-alt="Taxonomy category counts"}
+
+*Figure 13. Overlapping anomaly classes. These flags are exploratory and are not calibrated statistical tests. Sources: `Stage3C_Auto_vs_Grid.csv` and `GCV_Stage3C_Anomaly_Taxonomy_All_Eastings.csv`.*
+
+```{r table-taxonomy}
+knitr::kable(read.csv("generated_figures_tables/T11_taxonomy_codebook.csv"),
+ caption="Nonexclusive anomaly taxonomy; the 0.25 coefficient and five-point GCV thresholds are provisional research thresholds. Sources: GCV_Stage3C_Anomaly_Taxonomy_All_Eastings.csv and Stage3C_Auto_vs_Grid.csv.")
+```
+
+# Limitations and next stage
+
+The completed evidence is numerical and source-traceable but does not prove global GCV optimality. The grid-detected candidates are not yet verified roots of Reiss--Ogden's stationary-point condition, and statistical performance relative to the unknown treatment effect has not been established. Stage 4A (local refinement) and Stage 5 (stationary-point geometry) remain prospective.
+
+# Source archive and reproducibility
+
+The revised PDF now ends with Section 11 (limits and next steps). The original pasted texts remain unmodified in the separately supplied `verbatim/` source archive, rather than being embedded after Section 11.
+
+All R code for figures and tables remains in `generate_figures_tables.R`, invoked from the executable Quarto code chunk at the beginning of this notebook. The charts and their underlying source CSVs are in `source_data/`. The Quarto notebook does not rerun the GAM model fitting.

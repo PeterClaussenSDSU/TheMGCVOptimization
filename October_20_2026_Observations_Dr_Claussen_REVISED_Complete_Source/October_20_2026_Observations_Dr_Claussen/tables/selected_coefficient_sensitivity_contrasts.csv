@@ -1,0 +1,3 @@
+Easting,GCV gap,Product B difference,Interpretation
+174,+2.439,-1.237,Larger coefficient sensitivity
+374,+10.761,-0.014,Small coefficient sensitivity despite larger GCV gap

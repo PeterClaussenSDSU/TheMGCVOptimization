@@ -1,0 +1,573 @@
+---
+title: "Stage 3C: Fixed-grid GCV Across the Full Harvest Field"
+author: "Reproducible research notebook"
+format:
+  html:
+    toc: true
+    number-sections: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Stage 3C — Full-field fixed-grid `mgcv` GCV analysis
+
+**Research project:** Smoothing-parameter selection, criterion geometry, and Product B coefficient instability in the harvest strip trial  
+**Status:** Stage 1A, 1B, 2, 3A and 3B are validated; Stage 3C below is an executable **planned computation**, not a claimed empirical result.
+
+## The statistical question
+
+For Easting \(e\), we fit independently
+
+\[
+Y_{i,e}=\beta_{0,e}+\beta_{B,e}I(Product_i=B)+f_e(Northing_i)+\varepsilon_{i,e},
+\]
+
+using the **same** `mgcv::gam` B-spline specification as Stage 3A and 3B. The Northing and Product design is common across 199 Eastings; each Easting has a different 24-element response vector. Stage 3B demonstrated 199 converged automatic fits, and six Eastings (28, 30, 172, 174, 214, 216) where automatic GCV exceeds the exact linear alternative. This **does not** rule out better interior alternatives at other Eastings.
+
+For a smoothing parameter \(\lambda\), we evaluate
+
+\[
+GCV_e(\lambda)=\frac{24\,RSS_e(\lambda)}{(24-EDF_e(\lambda))^2}.
+\]
+
+Then define the finite-grid diagnostic
+
+\[
+D_{\mathrm{grid}}(e)=GCV_e(\widetilde\lambda_e)
+  - \min_{\lambda\in\mathcal G}GCV_e(\lambda).
+\]
+
+Positive values above a documented tolerance indicate an evaluated grid candidate with a lower GCV score than the automatic fit. **A grid cannot mathematically establish the global GCV minimum.** The exact linear-limit score is examined separately. Numerical smoothing parameters from `mgcv` are **not directly comparable** to those from the different manual spline basis in Stage 2.
+
+## Expected outputs
+
+Run in RStudio on Windows using `C:/Users/pbbs/Claussen/Example1SmoothHarvestPasses.csv`. The stage creates a new directory `GCV_Full_Field_Project/03C_MGCV_Fixed_Grid_Full_Field` with separate per-Easting checkpoints and the accepted full grid, automatic-versus-grid summary, minima table, pilot benchmark, validation gate, PDF figures, and provenance record.
+
+**Computation size:** 199 Eastings × 600 fixed values = **119,400 GAM fits**. This may be a lengthy run. The script can safely be restarted using completed checkpoints as long as the dataset, reference files, software version and model/grid settings remain unchanged. Do not delete or edit checkpoint manifest files mid-run.
+
+**Boundary:** Stage 3C does **not** run Reiss–Ogden \(h_1,h_2,h_3\) calculations or a formal significance test. Those are subsequent stages.
+
+
+## Part 1 — Configure the study and guard against stale checkpoints
+
+**Purpose.** Preserve the original GAM specification and 600-point log-smoothing-parameter grid used in Stage 3A. The full dataset, accepted Stage 3B automatic-fit table, and pilot grid are required inputs. The checkpoints are tied to file MD5 hashes, R/mgcv versions, the grid, and the formula. This prevents mixing results from different inputs or model versions when restarting.
+
+**Packages.** `mgcv` is the only external analysis package; run `install.packages("mgcv")` once if necessary. `tools`, `grDevices`, and file I/O functions are supplied with standard R. Neither notebook needs additional statistical packages to run, although rendering a Quarto or R Markdown document requires the relevant authoring software. No user-defined functions are employed.
+
+```{r}
+# STAGE 3C.  mgcv::gam repeated at fixed smoothing parameter.
+# External analysis package: mgcv; everything else is standard R.
+if (!requireNamespace("mgcv", quietly = TRUE)) {
+  stop("Please run install.packages('mgcv') once, then restart.")
+}
+library(mgcv)
+
+data_dir <- "C:/Users/pbbs/Claussen"
+full_file <- file.path(data_dir, "Example1SmoothHarvestPasses.csv")
+auto_file <- file.path(data_dir, "GCV_Full_Field_Project",
+                       "03B_MGCV_Automatic_Full_Field",
+                       "Stage3B_Automatic_Selections.csv")
+linear_file <- file.path(data_dir, "GCV_Full_Field_Project",
+                         "03B_MGCV_Automatic_Full_Field",
+                         "Stage3B_Linear_Limit_Check.csv")
+pilot_file <- file.path(data_dir, "GCV_Full_Field_Project",
+                        "03A_MGCV_Pilot", "Stage3A_Fixed_Grid.csv")
+
+out_dir <- file.path(data_dir, "GCV_Full_Field_Project",
+                     "03C_MGCV_Fixed_Grid_Full_Field")
+checkpoint_dir <- file.path(out_dir, "checkpoints")
+manifest_file <- file.path(out_dir, "Stage3C_Checkpoint_Manifest.csv")
+
+files_needed <- c(full_file, auto_file, linear_file, pilot_file)
+if (!all(file.exists(files_needed))) {
+  stop("Missing input(s): ", paste(files_needed[!file.exists(files_needed)],
+                                  collapse = "; "))
+}
+dir.create(checkpoint_dir, recursive = TRUE, showWarnings = FALSE)
+
+eastings <- seq(2, 398, by = 2)
+pilot_eastings <- c(212, 214, 216, 218, 232, 234)
+log_grid <- seq(-12, 25, length.out = 600)
+sp_grid <- exp(log_grid)
+ngrid <- length(log_grid)
+comparison_tolerance <- 1e-4
+pilot_tolerance <- 1e-5
+
+input_hashes <- unname(tools::md5sum(files_needed))
+manifest <- data.frame(
+  Key = c("full_csv_md5", "stage3b_auto_md5", "stage3b_linear_md5",
+          "stage3a_grid_md5", "R_version", "mgcv_version",
+          "model", "grid_log_min", "grid_log_max", "grid_n"),
+  Value = c(input_hashes, R.version.string,
+            as.character(packageVersion("mgcv")),
+            "Yield ~ Product + s(Northing, bs='bs', k=10, m=c(3,2)); gaussian; GCV.Cp",
+            as.character(min(log_grid)), as.character(max(log_grid)),
+            as.character(ngrid)),
+  stringsAsFactors = FALSE
+)
+
+if (file.exists(manifest_file)) {
+  old <- read.csv(manifest_file, stringsAsFactors = FALSE)
+  if (!identical(as.character(old$Key), as.character(manifest$Key)) ||
+      !identical(as.character(old$Value), as.character(manifest$Value))) {
+    stop("Checkpoint manifest changed. Use a NEW output directory; do not mix runs.")
+  }
+} else {
+  existing <- list.files(checkpoint_dir, pattern = "^E[0-9]{3}\\.csv$")
+  if (length(existing) > 0) {
+    stop("Checkpoints exist but manifest is absent; do not reuse this folder.")
+  }
+  write.csv(manifest, manifest_file, row.names = FALSE)
+}
+cat("STAGE 3C: ", length(eastings), " Eastings x ", ngrid,
+    " smoothing values = ", length(eastings) * ngrid,
+    " grid fits requested.\n", sep = "")
+cat("R:", R.version.string, "| mgcv:",
+    as.character(packageVersion("mgcv")), "\n")
+```
+
+**Expected result:** The console should report 199 Eastings, 600 grid points, and **119,400** requested fits. On a restart, matching checkpoints will be reused; a changed manifest causes an intentional stop.
+
+## Part 2 — Read the complete harvest dataset and verify its fixed design
+
+**Purpose.** Group each Easting's 24 measurements by `PassNo`, code Product E as the reference and B as the effect to be estimated, and verify that the predictors remain constant. This matches the original verified specification. The data file is read; it is never modified.
+
+```{r}
+full <- read.csv(full_file, stringsAsFactors = FALSE, check.names = TRUE)
+required <- c("Yield", "Easting", "PassNo", "Pair", "Product",
+              "Northing", "Pass")
+stopifnot(all(required %in% names(full)), nrow(full) == 4776)
+for (field in c("Yield", "Easting", "PassNo", "Pair", "Northing", "Pass")) {
+  full[[field]] <- suppressWarnings(as.numeric(as.character(full[[field]])))
+}
+full$Product <- trimws(as.character(full$Product))
+stopifnot(all(is.finite(as.matrix(full[, c("Yield", "Easting", "PassNo",
+                                             "Pair", "Northing", "Pass")]))),
+          all(full$Product %in% c("E", "B")),
+          identical(sort(unique(full$Easting)), as.numeric(eastings)),
+          !anyDuplicated(paste(full$Easting, full$PassNo, sep = "_")))
+
+slices <- vector("list", length(eastings))
+for (idx in seq_along(eastings)) {
+  z <- full[full$Easting == eastings[idx], , drop = FALSE]
+  z <- z[order(z$PassNo), , drop = FALSE]
+  stopifnot(nrow(z) == 24,
+            identical(as.numeric(z$PassNo), as.numeric(1:24)))
+  z$Product <- factor(z$Product, levels = c("E", "B"))
+  stopifnot(sum(z$Product == "B") == 12)
+  slices[[idx]] <- z
+}
+z0 <- slices[[1]]
+for (idx in seq_along(eastings)) {
+  z <- slices[[idx]]
+  stopifnot(identical(z$Northing, z0$Northing),
+            identical(as.character(z$Product), as.character(z0$Product)),
+            identical(z$Pair, z0$Pair), identical(z$Pass, z0$Pass))
+}
+cat("Common-design check PASS: 199 slices, 24 passes per slice.\n")
+```
+
+**Expected result:** Expect an unambiguous common-design PASS. The 199 response vectors differ, but the treatment assignments and Northing positions are the same. This does not establish independence of adjacent Eastings.
+
+## Part 3 — Load the already accepted Stage 3B and Stage 3A reference tables
+
+**Purpose.** Do not rerun 199 automatic fits needlessly. Compare every fixed-grid profile with the **same model** already fitted in Stage 3B. Preserve the Stage 3A pilot grid as a quality-control benchmark. A separate exact linear OLS limit is available from Stage 3B.
+
+```{r}
+automatic <- read.csv(auto_file, stringsAsFactors = FALSE)
+linear <- read.csv(linear_file, stringsAsFactors = FALSE)
+pilot_grid <- read.csv(pilot_file, stringsAsFactors = FALSE)
+
+stopifnot(nrow(automatic) == 199, nrow(linear) == 199,
+          nrow(pilot_grid) == 3600,
+          identical(as.numeric(automatic$Easting), as.numeric(eastings)),
+          identical(as.numeric(linear$Easting), as.numeric(eastings)),
+          all(automatic$Converged),
+          all(automatic$Selected_SP_Refit_GCV_Diff < 1e-6))
+
+for (e in pilot_eastings) {
+  p <- pilot_grid[pilot_grid$Easting == e, , drop = FALSE]
+  p <- p[order(p$LogLambda), , drop = FALSE]
+  stopifnot(nrow(p) == ngrid,
+            max(abs(p$LogLambda - log_grid)) < 1e-12)
+}
+cat("Stage 3B automatic fits and Stage 3A pilot grid: inputs accepted.\n")
+```
+
+**Expected result:** Expect 199 automatic rows, 199 linear-limit rows, and 3,600 pilot grid rows. These are reference results, not newly estimated values.
+
+## Part 4 — Evaluate all fixed-sp profiles, with one durable checkpoint per Easting
+
+**Purpose.** For each Easting and grid value, fix `sp` explicitly, fit the original GAM, calculate GCV from residual sums of squares and EDF, and record the unpenalized Product B coefficient. This can be computationally expensive; it may take a long time depending on your computer. The program writes each **completed 600-fit slice** to a checkpoint. Rerunning the same script reuses valid checkpoints, so there is no need to restart all 119,400 fits.
+
+**Meaning of `sp`.** The numerical values refer only to this exact `mgcv` basis and penalty (`bs='bs', k=10, m=c(3,2)`). They must not be compared numerically with the parameters of the separate manual spline basis. `Converged` in Stage 3B does not guarantee global optimality.
+
+```{r}
+grid_slices <- vector("list", length(eastings))
+fit_errors <- data.frame(Easting = numeric(0), Grid_Index = integer(0),
+                         Detail = character(0), stringsAsFactors = FALSE)
+used_checkpoints <- 0L
+computed_slices <- 0L
+run_start <- Sys.time()
+
+for (idx in seq_along(eastings)) {
+  e <- eastings[idx]
+  checkpoint_file <- file.path(checkpoint_dir, sprintf("E%03d.csv", e))
+
+  if (file.exists(checkpoint_file)) {
+    cp <- read.csv(checkpoint_file, stringsAsFactors = FALSE)
+    needed <- c("Easting", "LogLambda", "Lambda", "GCV",
+                "Smooth_EDF", "Product_B", "RSS")
+    if (!all(needed %in% names(cp)) || nrow(cp) != ngrid ||
+        any(cp$Easting != e) ||
+        any(!is.finite(as.matrix(cp[, needed]))) ||
+        max(abs(cp$LogLambda - log_grid)) > 1e-12 ||
+        max(abs(cp$Lambda - sp_grid) / sp_grid) > 1e-12) {
+      stop("Invalid saved checkpoint: ", checkpoint_file,
+           ". Inspect rather than silently mixing results.")
+    }
+    grid_slices[[idx]] <- cp
+    used_checkpoints <- used_checkpoints + 1L
+  } else {
+    z <- slices[[idx]]
+    scores <- numeric(ngrid)
+    edf <- numeric(ngrid)
+    betas <- numeric(ngrid)
+    rss <- numeric(ngrid)
+    failed <- FALSE
+
+    for (j in seq_len(ngrid)) {
+      fit <- try(mgcv::gam(
+        Yield ~ Product + s(Northing, bs = "bs", k = 10, m = c(3, 2)),
+        data = z, family = gaussian(), method = "GCV.Cp", sp = sp_grid[j]
+      ), silent = TRUE)
+
+      if (inherits(fit, "try-error")) {
+        fit_errors <- rbind(fit_errors, data.frame(
+          Easting = e, Grid_Index = j,
+          Detail = substr(as.character(fit)[1], 1, 350)))
+        failed <- TRUE
+        break
+      }
+      n <- nrow(z)
+      total_edf <- sum(fit$edf)
+      rss[j] <- sum(residuals(fit)^2)
+      scores[j] <- n * rss[j] / (n - total_edf)^2
+      edf[j] <- total_edf - 2
+      betas[j] <- unname(as.numeric(coef(fit)["ProductB"]))
+    }
+
+    if (failed || !all(is.finite(c(scores, edf, betas, rss)))) {
+      write.csv(fit_errors, file.path(out_dir, "Stage3C_Fit_Errors.csv"),
+                row.names = FALSE)
+      stop("Grid failed or returned non-finite results at Easting ", e,
+           ". Check Stage3C_Fit_Errors.csv; previous checkpoints are safe.")
+    }
+
+    cp <- data.frame(Easting = rep(e, ngrid), LogLambda = log_grid,
+                     Lambda = sp_grid, GCV = scores, Smooth_EDF = edf,
+                     Product_B = betas, RSS = rss)
+    # Write a temporary file and then rename it, so that a partial file
+    # cannot be mistaken for a completed Easting checkpoint.
+    temporary <- tempfile(pattern = "pending_", tmpdir = checkpoint_dir,
+                          fileext = ".csv")
+    write.csv(cp, temporary, row.names = FALSE)
+    if (!file.rename(temporary, checkpoint_file)) {
+      stop("Could not commit checkpoint for Easting ", e)
+    }
+    grid_slices[[idx]] <- cp
+    computed_slices <- computed_slices + 1L
+  }
+
+  if (idx %% 10L == 0L || idx == length(eastings)) {
+    cat(sprintf("Finished %d / %d Eastings; new=%d, resumed=%d; elapsed=%.1f min\n",
+        idx, length(eastings), computed_slices, used_checkpoints,
+        as.numeric(difftime(Sys.time(), run_start, units = "mins"))))
+  }
+}
+write.csv(fit_errors, file.path(out_dir, "Stage3C_Fit_Errors.csv"),
+          row.names = FALSE)
+cat("All", length(eastings), "Easting profiles available;",
+    length(eastings) * ngrid, "evaluated grid scores.\n")
+```
+
+**Expected result:** The code must finish **199 complete profiles and 119,400 GCV evaluations** with no fit errors. Restarting should print that existing checkpoints were resumed. A corrupted checkpoint deliberately blocks the run.
+
+## Part 5 — Assemble the long grid table and independently validate the pilot profiles
+
+**Purpose.** Join the individual 600-row profile files, verify their mathematical shape and ordering, then compare the full set of 600 values at each of the six pilot Eastings against Stage 3A. This is a strong empirical quality-control gate because it checks 3,600 previously completed calculations, not merely three historical summary values.
+
+```{r}
+all_grid <- do.call(rbind, grid_slices)
+row.names(all_grid) <- NULL
+stopifnot(nrow(all_grid) == ngrid * length(eastings),
+          all(is.finite(as.matrix(all_grid[, c("GCV", "Smooth_EDF",
+                                                 "Product_B", "RSS")]))))
+
+pilot_benchmark <- data.frame()
+for (e in pilot_eastings) {
+  now <- all_grid[all_grid$Easting == e, , drop = FALSE]
+  was <- pilot_grid[pilot_grid$Easting == e, , drop = FALSE]
+  now <- now[order(now$LogLambda), , drop = FALSE]
+  was <- was[order(was$LogLambda), , drop = FALSE]
+  stopifnot(nrow(now) == ngrid, nrow(was) == ngrid)
+  d_gcv <- max(abs(now$GCV - was$GCV))
+  d_beta <- max(abs(now$Product_B - was$Product_B))
+  d_edf <- max(abs(now$Smooth_EDF - was$Smooth_EDF))
+  pilot_benchmark <- rbind(pilot_benchmark, data.frame(
+    Easting = e, Max_Abs_GCV_Diff = d_gcv,
+    Max_Abs_Product_B_Diff = d_beta,
+    Max_Abs_Smooth_EDF_Diff = d_edf,
+    PASS = max(c(d_gcv, d_beta, d_edf)) < pilot_tolerance))
+}
+print(pilot_benchmark, row.names = FALSE, digits = 11)
+write.csv(pilot_benchmark,
+          file.path(out_dir, "Stage3C_Pilot_Grid_Benchmark.csv"),
+          row.names = FALSE)
+if (!all(pilot_benchmark$PASS)) {
+  stop("Stage 3C failed independent six-slice benchmark. Do not accept output.")
+}
+cat("PILOT GRID BENCHMARK: PASS.\n")
+```
+
+**Expected result:** Expect all six pilot benchmark rows to pass with very small numerical discrepancies. Any failure blocks accepted outputs.
+
+## Part 6 — Classify interior grid dips and compare candidate GCV scores
+
+**Purpose.** Distinguish two questions: *Does the GCV curve contain multiple local candidate minima?* and *Did the automatic optimizer select the best-scoring evaluated candidate?* A three-point negative-to-positive slope change provides a **grid-based local minimum candidate**; it is not yet the exact Reiss–Ogden equation \(h_2=h_3\). We require smooth EDF above 1.01 so a numerically flat near-linear tail is not mislabeled as a flexible interior dip.
+
+The comparison uses the best fixed-grid value and also the exact linear OLS limit (an independent known candidate). If no interior dip is detected, the structural gap is `NA`, not zero. Relative comparisons use the **same** mgcv model for the grid and automatic choices; manual-B-spline λ scales are never mixed.
+
+```{r}
+summary_rows <- vector("list", length(eastings))
+interior_rows <- data.frame()
+
+for (idx in seq_along(eastings)) {
+  e <- eastings[idx]
+  g <- grid_slices[[idx]]
+  a <- automatic[automatic$Easting == e, , drop = FALSE]
+  l <- linear[linear$Easting == e, , drop = FALSE]
+  stopifnot(nrow(a) == 1, nrow(l) == 1)
+
+  j_best <- which.min(g$GCV)
+  turns <- diff(sign(diff(g$GCV)))
+  candidates <- which(turns == 2) + 1L
+  candidates <- candidates[g$Smooth_EDF[candidates] > 1.01]
+  best_interior <- NA_real_
+  if (length(candidates) > 0L) {
+    best_interior <- min(g$GCV[candidates])
+    for (j in candidates) {
+      interior_rows <- rbind(interior_rows, data.frame(
+        Easting = e, Grid_Index = j, LogLambda = g$LogLambda[j],
+        GCV = g$GCV[j], Smooth_EDF = g$Smooth_EDF[j],
+        Product_B = g$Product_B[j]))
+    }
+  }
+  # Finite-grid vs exact linear-limit comparisons are DISTINCT.
+  best_grid_gcv <- g$GCV[j_best]
+  best_eval_gcv <- min(a$GCV, best_grid_gcv, l$Linear_GCV)
+  summary_rows[[idx]] <- data.frame(
+    Easting = e,
+    Automatic_LogLambda = a$LogLambda,
+    Automatic_GCV = a$GCV,
+    Automatic_Smooth_EDF = a$Smooth_EDF,
+    Automatic_Product_B = a$Product_B,
+    Best_Grid_LogLambda = g$LogLambda[j_best],
+    Best_Grid_GCV = best_grid_gcv,
+    Best_Grid_Smooth_EDF = g$Smooth_EDF[j_best],
+    Best_Grid_Product_B = g$Product_B[j_best],
+    Grid_Minimum_At_Right_Edge = (j_best == ngrid),
+    Exact_Linear_GCV = l$Linear_GCV,
+    Exact_Linear_Product_B = l$Linear_Product_B,
+    Interior_Grid_Dip_Count = length(candidates),
+    Best_Interior_Grid_GCV = best_interior,
+    Structural_Gap_Interior_Minus_Linear = best_interior - l$Linear_GCV,
+    Auto_Minus_Best_Grid_GCV = a$GCV - best_grid_gcv,
+    Auto_Minus_Best_Evaluated_GCV = a$GCV - best_eval_gcv,
+    Auto_Minus_Best_Grid_Beta = a$Product_B - g$Product_B[j_best],
+    Auto_Worse_Than_Grid = (a$GCV - best_grid_gcv > comparison_tolerance),
+    Auto_Worse_Than_Linear = (a$GCV - l$Linear_GCV > comparison_tolerance),
+    stringsAsFactors = FALSE)
+}
+summary <- do.call(rbind, summary_rows)
+row.names(summary) <- NULL
+
+cat("AUTO WORSE THAN BEST GRID:", sum(summary$Auto_Worse_Than_Grid), "Eastings.\n")
+cat("AUTO WORSE THAN EXACT LINEAR:",
+    sum(summary$Auto_Worse_Than_Linear), "Eastings.\n")
+cat("MULTIPLE GRID-DETECTED INTERIOR DIPS:",
+    sum(summary$Interior_Grid_Dip_Count >= 2), "Eastings.\n")
+cat("AUTOMATIC/BEST-GRID LARGEST COEFFICIENT DIFFERENCE:",
+    max(abs(summary$Auto_Minus_Best_Grid_Beta)), "\n")
+print(summary[summary$Auto_Worse_Than_Grid,
+  c("Easting", "Auto_Minus_Best_Grid_GCV",
+    "Auto_Minus_Best_Grid_Beta", "Interior_Grid_Dip_Count")],
+  row.names = FALSE, digits = 7)
+```
+
+**Expected result:** Counts and values are **unknown until you run Stage 3C**. In particular, do not expect exactly six inferior automatic fits; Stage 3B's linear-limit screen cannot detect a better competing interior solution.
+
+## Part 7 — Validation gates and publication-safe exports
+
+**Purpose.** Confirm complete grid coverage, six pilot references, exact linear-screen reproduction, finite numbers, and nonnegative automatic-versus-best-evaluated gaps (up to numerical tolerance). Accepted output files are written **only after** all checks pass. The original full CSV, three historical slices, manual calculations, and Stage 3A/3B outputs are left untouched.
+
+```{r}
+linear_disagreement <- abs(
+  (summary$Automatic_GCV - summary$Exact_Linear_GCV) -
+  (automatic$GCV - linear$Linear_GCV))
+
+checks <- data.frame(
+  Check = c("199 profile checkpoints", "119400 grid fits",
+            "Six full-grid pilot benchmarks", "No fit errors",
+            "All finite grid scores", "199 comparison records",
+            "Linear-screen arithmetic", "Best evaluated <= automatic"),
+  PASS = c(length(grid_slices) == 199,
+           nrow(all_grid) == 119400,
+           all(pilot_benchmark$PASS),
+           nrow(fit_errors) == 0,
+           all(is.finite(all_grid$GCV)),
+           nrow(summary) == 199,
+           max(linear_disagreement) < 1e-9,
+           min(summary$Auto_Minus_Best_Evaluated_GCV) > -1e-9))
+print(checks, row.names = FALSE)
+write.csv(checks, file.path(out_dir, "Stage3C_Validation_Gate.csv"),
+          row.names = FALSE)
+if (!all(checks$PASS)) {
+  stop("Stage 3C acceptance gate failed. No accepted results exported.")
+}
+write.csv(all_grid, file.path(out_dir, "Stage3C_Full_Grid.csv"), row.names = FALSE)
+write.csv(summary, file.path(out_dir, "Stage3C_Auto_vs_Grid.csv"),
+          row.names = FALSE)
+write.csv(interior_rows, file.path(out_dir, "Stage3C_Interior_Grid_Dips.csv"),
+          row.names = FALSE)
+cat("STAGE 3C VALIDATION: PASS. Accepted tables exported.\n")
+```
+
+**Expected result:** The validation gate must show PASS for every check. The files include the 119,400-row grid, 199-row comparison, and detected interior candidates.
+
+## Part 8 — Plot the full-field GCV geometry and coefficient trajectories
+
+**Purpose.** Produce an auditable PDF using only computed results. We include a heatmap of GCV minus the exact linear score, automatic and best-grid coefficient curves, screening diagnostics, complexity/selection plots, and six pilot profiles. Colors indicate **computed** values, not statistical significance. The finite grid may be too short to include selected automatic log-`sp` values near 29; those appear outside its \([-12,25]\) domain, although their GCV scores remain available.
+
+```{r}
+gcv_surface <- matrix(NA_real_, nrow = ngrid, ncol = length(eastings))
+for (idx in seq_along(eastings)) {
+  gcv_surface[, idx] <- grid_slices[[idx]]$GCV -
+    linear$Linear_GCV[idx]
+}
+
+pdf(file.path(out_dir, "Stage3C_Full_Field_Diagnostics.pdf"),
+    width = 11, height = 8.5, onefile = TRUE)
+par(mfrow = c(1, 1), mar = c(5, 5, 3, 2))
+image(x = log_grid, y = eastings, z = gcv_surface,
+      col = grDevices::hcl.colors(90, "RdBu", rev = TRUE),
+      xlab = "log(mgcv smoothing parameter)", ylab = "Easting",
+      main = "Fixed-mgcv GCV minus exact linear GCV")
+abline(h = pilot_eastings, lty = 3)
+
+plot(summary$Easting, summary$Automatic_Product_B,
+     type = "l", lwd = 2, col = "firebrick",
+     xlab = "Easting", ylab = "Product B coefficient",
+     main = "Automatic / best-grid / exact linear trajectories")
+lines(summary$Easting, summary$Best_Grid_Product_B,
+      col = "darkgreen", lwd = 2, lty = 2)
+lines(summary$Easting, summary$Exact_Linear_Product_B,
+      col = "steelblue", lwd = 1.5, lty = 3)
+legend("topright", c("Automatic", "Best 600-point grid", "Exact linear"),
+       col = c("firebrick", "darkgreen", "steelblue"),
+       lty = c(1, 2, 3), lwd = c(2, 2, 1.5), bty = "n")
+
+plot(summary$Easting, summary$Auto_Minus_Best_Grid_GCV,
+     type = "h", xlab = "Easting", ylab = "GCV(auto) - GCV(grid minimum)",
+     main = "Automatic-versus-grid optimizer score gap")
+abline(h = 0, lty = 2, col = "gray40")
+points(summary$Easting[summary$Auto_Worse_Than_Grid],
+       summary$Auto_Minus_Best_Grid_GCV[summary$Auto_Worse_Than_Grid],
+       pch = 19, col = "firebrick")
+
+par(mfrow = c(2, 1), mar = c(4, 5, 3, 2))
+plot(summary$Easting, summary$Automatic_LogLambda,
+     type = "l", xlab = "Easting", ylab = "Automatic log(sp)",
+     main = "Selected smoothing parameter by Easting")
+lines(summary$Easting, summary$Best_Grid_LogLambda,
+      col = "steelblue", lty = 2)
+legend("topright", c("Auto", "Best grid"),
+       col = c("black", "steelblue"), lty = c(1, 2), bty = "n")
+plot(summary$Easting, summary$Automatic_Smooth_EDF,
+     type = "l", xlab = "Easting", ylab = "Smooth EDF",
+     main = "Automatic versus best-grid complexity")
+lines(summary$Easting, summary$Best_Grid_Smooth_EDF,
+      col = "steelblue", lty = 2)
+abline(h = 1, lty = 3, col = "gray40")
+
+par(mfrow = c(2, 1), mar = c(4, 5, 3, 2))
+plot(summary$Easting, summary$Auto_Minus_Best_Grid_Beta,
+     type = "h", xlab = "Easting", ylab = "Beta(auto) - beta(grid)",
+     main = "Unpenalized coefficient selection sensitivity")
+abline(h = 0, lty = 2)
+plot(summary$Easting, summary$Interior_Grid_Dip_Count,
+     type = "h", xlab = "Easting", ylab = "Number of detected dips",
+     main = "Grid-detected interior GCV minima")
+
+par(mfrow = c(3, 2), mar = c(4, 4, 3, 1))
+for (e in pilot_eastings) {
+  j <- match(e, eastings)
+  g <- grid_slices[[j]]
+  a <- automatic[automatic$Easting == e, , drop = FALSE]
+  plot(g$LogLambda, g$GCV, type = "l", lwd = 1.5,
+       xlab = "log(sp)", ylab = "GCV", main = paste("Easting", e))
+  if (a$LogLambda >= min(log_grid) && a$LogLambda <= max(log_grid)) {
+    points(a$LogLambda, a$GCV, pch = 19, col = "firebrick")
+  }
+  points(g$LogLambda[which.min(g$GCV)], min(g$GCV),
+         pch = 19, col = "steelblue")
+  abline(h = linear$Linear_GCV[j], lty = 3, col = "gray40")
+}
+dev.off()
+cat("Diagnostic PDF saved.\n")
+```
+
+**Expected result:** Expect a 6-page diagnostic PDF. The numerical values should agree with the exported CSV. The different smoothing regimes can be compared without claiming they are necessarily scientifically optimal.
+
+## Part 9 — Record provenance and declare the next research checkpoint
+
+**Purpose.** Save version numbers, exact model, numerical grid, validation outcome, execution history, and limits on inference. **Stage 4** will refine and classify candidate stationary points; **Stage 5** will implement Reiss–Ogden's \(h_2-h_3\) equations in a justified reparameterization. Neither is performed by Stage 3C.
+
+```{r}
+provenance <- c(
+  paste("Run timestamp:", format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")),
+  paste("R version:", R.version.string),
+  paste("mgcv version:", as.character(packageVersion("mgcv"))),
+  paste("Full input:", full_file),
+  paste("Completed Easting profiles:", length(eastings)),
+  paste("Newly computed in this run:", computed_slices),
+  paste("Resumed from existing checkpoints:", used_checkpoints),
+  paste("Grid:", ngrid, "points; log(sp) from", min(log_grid),
+        "to", max(log_grid)),
+  "Formula: Yield ~ Product + s(Northing, bs='bs', k=10, m=c(3,2))",
+  "Family: gaussian; method: GCV.Cp; one fixed sp at every grid point",
+  "Grid comparison is an evaluated candidate comparison, not a global proof",
+  "Detected dips are grid-defined, not verified exact Reiss-Ogden roots",
+  "Adjacent Easting responses may be dependent; first-stage smoothing unresolved",
+  "Stage 3C validation: PASS"
+)
+writeLines(provenance, file.path(out_dir, "Stage3C_Provenance.txt"))
+cat("STAGE 3C FINAL STATUS: PASS\n")
+cat("Next: upload Stage3C_Auto_vs_Grid.csv, Stage3C_Pilot_Grid_Benchmark.csv,",
+    "Stage3C_Interior_Grid_Dips.csv, Stage3C_Validation_Gate.csv,",
+    "and Stage3C_Full_Field_Diagnostics.pdf.\n")
+```
+
+**Expected result:** The last printed line should be `STAGE 3C FINAL STATUS: PASS`. The results are available for interpretation; no hypothesis-testing significance level is implied.
+
+## How to interpret the next uploaded results
+
+1. **Validation first:** verify 199 full profiles, 119,400 grid rows, all six pilot profiles, and absence of fit errors.
+2. **Numerical optimization:** assess where automatic minus best-grid GCV is appreciably positive, including locations not flagged by the Stage 3B linear screen.
+3. **Criterion geometry:** examine the number, ordering, and spatial clustering of grid-detected interior dips. They are candidate extrema, not verified polynomial roots.
+4. **Scientific coefficients:** compare automatic and best-grid Product B estimates. Large differences are *diagnostic*, not automatically causal bias.
+5. **Research next step:** Stage 4 will perform continuous parameter refinement and basin classification; Stage 5 will construct the Reiss–Ogden stationarity functions for a validated parameterization.
+
+**Provenance:** Stage 3B reference results were generated in R 4.6.1 with `mgcv` 1.9-4, using `GCV.Cp` and `bs='bs', k=10, m=c(3,2)`. Reruns should retain source data and code version. Yield may already be smoothed in the original processing pipeline; no independent-noise inference is claimed.

@@ -1,0 +1,340 @@
+# Review of slides 4, 8, 14, 15, and 17 — plus a GCV anomaly taxonomy
+
+Your questions highlight an important distinction in our research: the geometry of the GCV criterion, the performance of the automatic optimizer, and the effect on the Product B coefficient are three different things.
+
+I checked the revised 22-slide Beamer source and the actual Stage 2 and Stage 3C datasets. I also created a manual GCV heatmap and two CSV files for classifying anomalies.
+
+## 1. What is the difference between slide 4 and slide 14?
+
+Both slides show full-field GCV landscapes, but they represent different implementations of penalized spline regression.
+
+| Feature                    | Slide 4                                                                            | Slide 14                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Research stage             | Stage 2                                                                            | Stage 3C                                                                     |
+| Method                     | Manual Base R cubic B-spline                                                       | `mgcv::gam()` cubic B-spline                                                 |
+| Smoothing-parameter grid   | 400 values                                                                         | 600 values                                                                   |
+| Log-\\(\lambda\\) interval | −1 to 23                                                                           | −12 to 25                                                                    |
+| Total GCV evaluations      | 79,600                                                                             | 119,400                                                                      |
+| Main data file             | `Manual_Full_Field_Grid.csv`                                                       | `Stage3C_Full_Grid.csv`                                                      |
+| Primary purpose            | Understand the numerical GCV landscape through an independently constructed spline | Investigate the criterion used by the actual automatic GAM fitting procedure |
+
+They use the same Yield data and statistical regression structure, but differ in knot construction and penalty parameterization.
+
+The key distinction is:
+
+- Slide 4: What does GCV look like when we explicitly construct the spline and calculate the penalized regression ourselves?
+- Slide 14: What does GCV look like when we repeatedly fit the original `mgcv` model at fixed smoothing parameters?
+
+We should retain both slides because they provide complementary numerical evidence. But we should not compare their numerical log-\\(\lambda\\) coordinates directly without aligning the penalty parameterizations.
+
+## 2. Should we create a heatmap of the manual GCV scores themselves?
+
+Yes. I created a two-panel figure showing both representations.
+
+[Colorblind-Safe Scientific Color Palette Generator | SciFig](https://images.openai.com/static-rsc-4/t9vRXwFSFZYmRqZW_IDJhDWbIF6mBFcIvWUTCIkDqXsZdscuZnEjlIUSduZW3nuWIYbHEyCj366wO6ux_UO7Xi1afY8ToUQjc5c14wsiGA3IEcWWF74QQgba7J2rCfVRPRxYf5f3hCNdDZ0iUFOyGtbWcYKhhmLbp5J_dmun1y0?purpose=inline)
+
+[scifig.ai](https://scifig.ai/tools/scientific-color-palette-generator?utm_source=chatgpt.com)
+
+View the actual manual GCV heatmaps (PNG)
+
+Download the heatmaps (PDF)
+
+The actual generated figure uses all 79,600 Stage 2 GCV evaluations.
+
+### Left panel: Absolute GCV
+
+\\[ G(e,\ell)=GCV_e(e^\ell). \\]
+
+The horizontal axis is log-\\(\lambda\\), the vertical axis is Easting, and color represents the GCV score.
+
+This answers:
+
+> Where are GCV scores generally high or low across the field and smoothing-parameter grid?
+
+However, a GCV score can be high primarily because a particular Easting has greater residual variability—not necessarily because the smoothing parameter is poorly chosen.
+
+### Right panel: GCV relative to the linear limit
+
+\\[ \boxed{ D(e,\ell) = GCV_e(e^\ell)-GCV\_{e,\infty}. } \\]
+
+This answers:
+
+> For the same Easting, does a particular amount of smoothing improve GCV relative to the linear adjustment?
+
+The interpretation is straightforward:
+
+| Difference | Meaning                                                            |
+| ---------- | ------------------------------------------------------------------ |
+| Negative   | The finite-\\(\lambda\\) model has lower GCV than the linear model |
+| Positive   | The linear model has lower GCV                                     |
+| Zero       | The two have equal scores                                          |
+
+For detecting smoothing-regime preferences, the difference heatmap is more informative.
+
+I recommend keeping the absolute-GCV heatmap as a complementary view. It helps us see the overall criterion landscape, while the difference heatmap isolates the improvement or deterioration relative to a common reference model.
+
+Importantly, subtracting the linear-limit GCV does not change where the stationary points occur along log-\\(\lambda\\) within an Easting. The reference score is constant with respect to \\(\lambda\\).
+
+Thus,
+
+\\[ \frac{\partial}{\partial\ell} \left[ GCV_e(e^\ell)-GCV\_{e,\infty} \right] = \frac{\partial}{\partial\ell}GCV_e(e^\ell). \\]
+
+Both heatmaps describe the same within-Easting stationary-point locations.
+
+## 3. Slide 17: Why does GCV increase at Easting 374?
+
+Slide 17, Two kinds of better-scoring alternative, distinguishes automatic selections that are inferior to the linear limit from automatic selections that are inferior to another finite smoothing parameter.
+
+Easting 374 belongs to the second category.
+
+The interesting feature is that its GCV curve has two detected interior local minima.
+
+| Quantity                | Automatic GAM | Lowest-grid GAM |
+| ----------------------- | ------------- | --------------- |
+| Log smoothing parameter | 2.1569        | −3.3523         |
+| GCV                     | 90.4316       | 79.6709         |
+| Smooth EDF              | 3.0814        | 7.9112          |
+| Product B coefficient   | 10.6145       | 10.6287         |
+
+The automatic optimizer selected a more heavily penalized, simpler smooth, with smooth EDF about 3.08.
+
+The fixed-grid search found a much more flexible model, with smooth EDF about 7.91, that had lower GCV.
+
+The discrepancy is
+
+\\[ \boxed{ 90.4316-79.6709=10.7608. } \\]
+
+This does not mean the GCV score is increasing over Easting. It means that, at the same Easting 374, the automatic procedure chose a local GCV basin whose score is higher than another available basin.
+
+There are two detected interior candidates:
+
+| Interior minimum               | Log-\\(\lambda\\) | GCV     | Smooth EDF |
+| ------------------------------ | ----------------- | ------- | ---------- |
+| Flexible regime                | −3.3523           | 79.6709 | 7.9112     |
+| More strongly penalized regime | 2.1452            | 90.4318 | 3.0899     |
+
+The automatic smoothing parameter is very close to the second candidate.
+
+Geometrically, that is the mechanism:
+
+\\[ \boxed{ \text{Two local valleys} \quad\longrightarrow\quad \text{automatic optimizer selects the higher one}. } \\]
+
+An important contrast is that the Product B coefficient barely changes:
+
+\\[ 10.6145-10.6287=-0.0142. \\]
+
+So at Easting 374, the smoothing choice substantially changes the GCV score and the complexity of the Northing fit, but barely changes the adjusted Product B effect.
+
+This differs from Easting 174, where a smaller GCV gap corresponds to much greater Product coefficient sensitivity.
+
+### Where to find Easting 374 in your files
+
+Open:
+
+`03C_MGCV_Fixed_Grid_Full_Field/Stage3C_Auto_vs_Grid.csv`
+
+Filter the `Easting` column to `374`.
+
+For the two separate minima, open:
+
+`03C_MGCV_Fixed_Grid_Full_Field/Stage3C_Interior_Grid_Dips.csv`
+
+Filter `Easting = 374`; there should be two rows.
+
+For the full GCV curve, open:
+
+`03C_MGCV_Fixed_Grid_Full_Field/Stage3C_Full_Grid.csv`
+
+Filter `Easting = 374` to retrieve its 600 smoothing-parameter evaluations.
+
+I also extracted that profile into a separate CSV:
+
+Download Easting 374's complete 600-point GCV profile
+
+## 4. How do you locate any anomaly shown on slide 17?
+
+The procedure is the same for every flagged Easting.
+
+Open `Stage3C_Auto_vs_Grid.csv` in Excel and enable Data → Filter. Then filter the `Easting` column to the location of interest.
+
+For example, at Easting 374, inspect the columns:
+
+| Column                      | What it tells you                                                |
+| --------------------------- | ---------------------------------------------------------------- |
+| `Automatic_GCV`             | Criterion score returned by the automatic fit                    |
+| `Best_Grid_GCV`             | Lowest score evaluated on the 600-point grid                     |
+| `Auto_Minus_Best_Grid_GCV`  | Magnitude of the automatic selection's GCV disadvantage          |
+| `Automatic_LogLambda`       | Location of the automatic solution on the log-\\(\lambda\\) axis |
+| `Best_Grid_LogLambda`       | Location of the lower-scoring grid candidate                     |
+| `Automatic_Smooth_EDF`      | Complexity of the automatically selected smooth                  |
+| `Best_Grid_Smooth_EDF`      | Complexity of the lower-scoring alternative                      |
+| `Auto_Minus_Best_Grid_Beta` | Consequence for the Product B estimate                           |
+
+Then use the other two CSV files for further detail: `Stage3C_Interior_Grid_Dips.csv` gives the locations of separate local minima, while `Stage3C_Full_Grid.csv` gives their complete sampled GCV profile.
+
+One practical point: these are CSV files associated with Excel, not separate Excel workbooks. When filtering in Excel, confirm you have opened the correct Stage 3C file rather than the similarly named Stage 3A pilot results.
+
+## 5. Slide 15: Which file contains the 28 Eastings with multiple minima?
+
+`Stage3C_Auto_vs_Grid.csv`, in the column `Interior_Grid_Dip_Count`.
+
+Filter that column to values greater than or equal to 2.
+
+The 28 Eastings are:
+
+2
+
+4
+
+6
+
+8
+
+44
+
+46
+
+48
+
+50
+
+52
+
+80
+
+122
+
+124
+
+126
+
+128
+
+130
+
+132
+
+182
+
+184
+
+186
+
+188
+
+190
+
+372
+
+374
+
+376
+
+378
+
+380
+
+382
+
+384
+
+Easting 48 is the only location with three detected interior minima; the other 27 have two.
+
+For convenience, I extracted all 28 into a ready-to-open file:
+
+Download the 28 multiple-minimum Eastings (CSV)
+
+For the individual minima at each location, use `Stage3C_Interior_Grid_Dips.csv`.
+
+## 6. Slide 8: What exactly is the structural GCV gap telling us?
+
+Slide 8 is titled Stage 2 | Comparing interior and linear candidate scores. It is based on the manual spline reconstruction, not the `mgcv` automatic optimizer.
+
+Its statistic is
+
+\\[ \boxed{ \Delta\_{\mathrm{struct}}(e) = GCV\_{e,\mathrm{best\ interior}} - GCV\_{e,\mathrm{linear}}. } \\]
+
+Suppose we have a GCV curve with an interior valley and a strongly penalized, nearly linear regime at the far-right end.
+
+We want to know which of those two regimes the GCV criterion prefers.
+
+Conceptual sketch. The actual decision uses the numerically calculated GCV scores for the corresponding Easting.
+
+There are three cases:
+
+- Negative structural gap: The interior minimum is lower than the linear-limit score. GCV favors retaining curvature in the Northing smooth.
+- Positive structural gap: The linear limit has the lower score. GCV favors suppressing the smooth's curvature.
+- Undefined structural gap: No qualifying interior minimum was detected by our procedure, so there is no detected interior candidate to compare.
+
+For example, at Easting 214, our original manual analysis found an interior minimum of approximately 158.422 and a linear-limit score of approximately 153.498.
+
+Thus
+
+\\[ \Delta\_{\mathrm{struct}}(214) = 158.422-153.498 \approx +4.924. \\]
+
+Despite the presence of an interior local minimum, the linear limit is the better-scoring candidate.
+
+Slide 8 shows criterion preference, whereas slide 17 shows automatic optimizer failure relative to an evaluated alternative.
+
+That is a fundamental distinction.
+
+## 7. Can we create a taxonomy of all multiple-minimum anomalies?
+
+Yes. I recommend a multilabel taxonomy, rather than forcing every Easting into one mutually exclusive category.
+
+An Easting can have multiple minima, an inferior automatic selection, and high coefficient sensitivity simultaneously. A single classification would conceal that relationship.
+
+I created an initial taxonomy for all 199 Eastings from the existing Stage 3C outputs.
+
+| Taxonomy | Detection rule                                                 | Statistical interpretation                                                   |
+| -------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| M0       | No qualifying interior minimum                                 | No interior minimum detected on the grid                                     |
+| M1       | One qualifying interior minimum                                | Single detected interior candidate                                           |
+| M2       | Two interior minima                                            | Competing interior local candidates                                          |
+| M3       | Three interior minima                                          | More complex multimodal criterion profile                                    |
+| A        | At least two interior minima                                   | Multiple-minimum anomaly                                                     |
+| B        | Automatic GCV − best-grid GCV > \\(10^{-4}\\)                  | Inferior automatic selection                                                 |
+| C        | Automatic GCV − linear GCV > \\(10^{-4}\\)                     | Automatic fit worse than the linear-limit alternative                        |
+| D        | Best interior GCV − linear GCV > \\(10^{-4}\\)                 | Linear limit scores lower than all detected interior candidates              |
+| E        | Best interior GCV − linear GCV < \\(-10^{-4}\\)                | An interior candidate scores lower than the linear limit                     |
+| F        | Absolute automatic-minus-best-grid Product B difference ≥ 0.25 | Substantial numerical coefficient sensitivity, using a provisional threshold |
+| G        | Multiple minima with GCV score spread ≥ 5                      | Widely separated candidate scores, using a provisional threshold             |
+| H        | Lowest grid score is at the right boundary                     | The finite-grid minimum is in the strongly penalized region                  |
+
+The thresholds for F and G are exploratory classifications, not statistical significance thresholds. We can refine them using coefficient scales, relative GCV differences, and simulation results.
+
+### Download the taxonomy
+
+Complete anomaly taxonomy — 199 Eastings
+
+Download the full taxonomy (CSV)
+
+Multiple-minimum anomaly subset — 28 Eastings
+
+Download the multiple-minimum subset (CSV)
+
+The full taxonomy includes the individual log smoothing parameters for detected candidates, GCV score gaps, and Product B differences, so you can sort by whichever form of instability you want to investigate.
+
+## 8. How I recommend using this taxonomy in our research
+
+We should distinguish three dimensions of each anomaly, rather than treating all anomalies as optimizer failures.
+
+| Dimension               | Research question                                                             | Primary measure                                |
+| ----------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------- |
+| Criterion geometry      | How many competing interior minima exist, and how far apart are their scores? | Number of minima, score spread, structural gap |
+| Optimization behavior   | Does automatic fitting select an inferior available candidate?                | Automatic-minus-best-grid GCV                  |
+| Coefficient consequence | Does that selection materially change the scientific coefficient?             | Automatic-minus-best-grid Product B            |
+
+Easting 374 is a useful example because it belongs to the multiple-minimum and inferior-automatic categories, yet has very little Product B sensitivity.
+
+Easting 174 illustrates a different kind of anomaly: only one qualifying interior minimum is detected, but the automatic fit is inferior to the linear limit and produces a substantial Product B difference.
+
+This is why I would not restrict our taxonomy exclusively to the 28 Eastings with multiple interior minima. We would miss scientifically relevant anomalies like 174, 214, and 216.
+
+### What comes next
+
+Before Stage 5 and the Reiss–Ogden \\(h\\)-functions, Stage 4A should refine the grid-detected minima and confirm the classifications.
+
+In particular, we should investigate whether the apparent minima are stable under finer log-\\(\lambda\\) resolution, whether very shallow minima are numerically distinguishable from flat regions, and whether optimizer failures persist after refining the competing candidates.
+
+My recommendation for the Beamer revision: show the absolute and relative manual GCV heatmaps together on slide 4, retain the package-based heatmap on slide 14, and add a taxonomy slide after slide 17. That would make the presentation's logical sequence clearer: first criterion geometry, then automatic optimizer behavior, then the consequences for the Product B coefficient.
